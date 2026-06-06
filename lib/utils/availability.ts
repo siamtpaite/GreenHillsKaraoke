@@ -6,10 +6,11 @@ import {
   where,
   setDoc,
   getDoc,
+  writeBatch,
   serverTimestamp,
 } from 'firebase/firestore';
-import { adminDb } from './firebase/admin';
-import { Slot, AvailabilityResponse } from './types';
+import { db } from '@/lib/firebase/config';
+import { Slot, AvailabilityResponse } from '@/lib/types';
 
 const OPERATING_HOURS_START = parseInt(process.env.OPERATING_HOURS_START || '12');
 const OPERATING_HOURS_END = parseInt(process.env.OPERATING_HOURS_END || '22');
@@ -41,7 +42,7 @@ export function formatTimeSlot(hour: number): string {
  * Check if a date is blackout (closed)
  */
 export async function isBlackoutDate(date: string): Promise<boolean> {
-  const blackoutRef = doc(adminDb, `blackoutDates/${date}`);
+  const blackoutRef = doc(db, `blackoutDates/${date}`);
   const blackoutSnap = await getDoc(blackoutRef);
   return blackoutSnap.exists();
 }
@@ -52,11 +53,11 @@ export async function isBlackoutDate(date: string): Promise<boolean> {
 export async function getOperatingHours(
   date: string
 ): Promise<{ open: number; close: number }> {
-  const dayOfWeek = new Date(date).toLocaleDateString('en-US', {
-    weekday: 'lowercase',
-  });
+const dayOfWeek = new Date(date).toLocaleDateString('en-US', {
+  weekday: 'long',
+}).toLowerCase();
 
-  const hoursRef = doc(adminDb, `operatingHours/${dayOfWeek}`);
+  const hoursRef = doc(db, `operatingHours/${dayOfWeek}`);
   const hoursSnap = await getDoc(hoursRef);
 
   if (hoursSnap.exists()) {
@@ -89,7 +90,7 @@ export async function getAvailability(date: string): Promise<AvailabilityRespons
   const slots: AvailabilityResponse['slots'] = [];
 
   for (let hour = hours.open; hour < hours.close; hour++) {
-    const slotRef = doc(adminDb, `availability/${date}/slots/${hour}`);
+    const slotRef = doc(db, `availability/${date}/slots/${hour}`);
     const slotSnap = await getDoc(slotRef);
 
     const status = slotSnap.exists()
@@ -115,10 +116,10 @@ export async function getAvailability(date: string): Promise<AvailabilityRespons
 export async function initializeSlotsForDate(date: string): Promise<void> {
   const hours = await getOperatingHours(date);
 
-  const batch = adminDb.batch();
+  const batch = writeBatch(db);
 
   for (let hour = hours.open; hour < hours.close; hour++) {
-    const slotRef = doc(adminDb, `availability/${date}/slots/${String(hour)}`);
+    const slotRef = doc(db, `availability/${date}/slots/${String(hour)}`);
     batch.set(slotRef, {
       status: 'available',
       hour,
@@ -139,7 +140,7 @@ export async function areHoursAvailable(
 ): Promise<boolean> {
   for (let i = 0; i < numHours; i++) {
     const hour = startHour + i;
-    const slotRef = doc(adminDb, `availability/${date}/slots/${String(hour)}`);
+    const slotRef = doc(db, `availability/${date}/slots/${String(hour)}`);
     const slotSnap = await getDoc(slotRef);
 
     if (!slotSnap.exists() || slotSnap.data().status !== 'available') {
