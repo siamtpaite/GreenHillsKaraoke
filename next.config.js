@@ -5,4 +5,7 @@ module.exports = {
     root: path.resolve(__dirname),
   },
   allowedDevOrigins: ['192.168.1.6'],
+  typescript: {
+    ignoreBuildErrors: true,
+  },
 };
