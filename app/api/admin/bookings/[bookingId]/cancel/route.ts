@@ -22,6 +22,13 @@ export async function POST(
 
     const booking = bookingSnap.data();
 
+    if (!booking) {
+      return NextResponse.json(
+        { success: false, error: 'Booking not found' },
+        { status: 404 }
+      );
+    }
+
     if (!['confirmed', 'checked_in'].includes(booking.status)) {
       return NextResponse.json(
         { success: false, error: 'Can only cancel active bookings' },
