@@ -4,10 +4,10 @@ import { sendWhatsAppNotification } from '@/lib/whatsapp/baileys-send';
 
 export async function POST(
   req: NextRequest,
-  { params }: { params: { bookingId: string } }
+  { params }: { params: Promise<{ bookingId: string }> }
 ) {
   try {
-    const { bookingId } = params;
+    const { bookingId } = await params;
     const now = new Date().toISOString();
 
     const bookingRef = adminDb.collection('bookings').doc(bookingId);
