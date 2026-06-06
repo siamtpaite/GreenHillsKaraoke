@@ -6,3 +6,4 @@ node_modules
 .DS_Store
 whatsapp_sessions/
 greenhills-karaoke-firebase-adminsdk-fbsvc-6bfecb78be.json
+.vercel
