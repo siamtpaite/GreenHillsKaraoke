@@ -4,11 +4,12 @@ import {
   runTransaction,
   getDoc,
 } from 'firebase/firestore';
-import { adminDb, db } from './firebase/admin';
-import { Booking, BookingRequest } from './types';
-import { generateHourList } from './utils/availability';
+import { adminDb } from '../firebase/admin';
+import { db } from '../firebase/config';
+import { Booking, BookingRequest } from '../types';
+import { generateHourList } from '../utils/availability';
 
-const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '1860');
+const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '1180');
 const DEPOSIT_AMOUNT = parseInt(process.env.DEPOSIT_AMOUNT || '500');
 
 /**
@@ -18,7 +19,7 @@ const DEPOSIT_AMOUNT = parseInt(process.env.DEPOSIT_AMOUNT || '500');
 export async function createBooking(
   req: BookingRequest
 ): Promise<{ bookingId: string; order: any }> {
-  const bookingId = doc(collection(adminDb, 'bookings')).id;
+  const bookingId = adminDb.collection('bookings').doc().id;
   const hourList = generateHourList(req.startHour, req.hours);
   const totalAmount = HOURLY_RATE * req.hours;
 

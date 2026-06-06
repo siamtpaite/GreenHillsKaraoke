@@ -143,7 +143,7 @@ export async function areHoursAvailable(
     const slotRef = doc(db, `availability/${date}/slots/${String(hour)}`);
     const slotSnap = await getDoc(slotRef);
 
-    if (!slotSnap.exists() || slotSnap.data().status !== 'available') {
+    if (slotSnap.exists() && slotSnap.data().status !== 'available') {
       return false;
     }
   }

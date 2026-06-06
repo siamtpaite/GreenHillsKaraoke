@@ -1,0 +1,32 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Install jimp",
+			"type": "shell",
+			"command": "npm install jimp",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Restart dev server",
+			"type": "shell",
+			"command": "pkill -f 'next dev' || true && npm run dev",
+			"args": [],
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Verify WhatsApp setup",
+			"type": "shell",
+			"command": "node scripts/setup-whatsapp.js",
+			"args": [],
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}

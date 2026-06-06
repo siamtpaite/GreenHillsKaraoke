@@ -1,10 +1,19 @@
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
 
-const razorpay = new Razorpay({
-  key_id: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID!,
-  key_secret: process.env.RAZORPAY_KEY_SECRET!,
-});
+function getRazorpayClient() {
+  const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+
+  if (!keyId || !keySecret) {
+    throw new Error('Razorpay credentials are not configured');
+  }
+
+  return new Razorpay({
+    key_id: keyId,
+    key_secret: keySecret,
+  });
+}
 
 /**
  * Create a Razorpay order for booking deposit
@@ -15,6 +24,7 @@ export async function createRazorpayOrder(
   customerEmail: string,
   customerPhone: string
 ): Promise<any> {
+  const razorpay = getRazorpayClient();
   const options = {
     amount, // in paise
     currency: 'INR',
@@ -60,6 +70,7 @@ export function verifyPaymentSignature(
  */
 export async function getPaymentDetails(paymentId: string): Promise<any> {
   try {
+    const razorpay = getRazorpayClient();
     const payment = await razorpay.payments.fetch(paymentId);
     return payment;
   } catch (error) {
@@ -76,6 +87,7 @@ export async function refundPayment(
   amount?: number
 ): Promise<any> {
   try {
+    const razorpay = getRazorpayClient();
     const refundOptions: any = {
       payment_id: paymentId,
     };

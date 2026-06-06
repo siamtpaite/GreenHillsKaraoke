@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createBooking } from '@/lib/booking/service';
-import { areHoursAvailable } from '@/lib/utils/availability';
+import { areHoursAvailable, initializeSlotsForDate } from '@/lib/utils/availability';
 import { createRazorpayOrder } from '@/lib/payment/razorpay';
 import { BookingRequest, ApiResponse } from '@/lib/types';
 
@@ -73,6 +73,13 @@ export async function POST(request: NextRequest) {
         } as ApiResponse<null>,
         { status: 400 }
       );
+    }
+
+    // Make sure the date has slot documents initialized before checking availability.
+    try {
+      await initializeSlotsForDate(date);
+    } catch (error) {
+      // Ignore initialization errors and continue; the availability check below is resilient.
     }
 
     // Check if requested hours are available

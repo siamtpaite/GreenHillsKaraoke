@@ -4,15 +4,21 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "whatsapp-server": "node scripts/whatsapp-server.js",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
+    "@hapi/boom": "^10.0.1",
     "axios": "^1.17.0",
+    "baileys": "^6.7.0",
+    "express": "^5.2.1",
     "firebase": "^12.14.0",
     "firebase-admin": "^13.10.0",
+    "jimp": "^1.6.1",
     "next": "16.2.7",
+    "qrcode-terminal": "^0.12.0",
     "razorpay": "^2.9.6",
     "react": "19.2.4",
     "react-dom": "19.2.4"
@@ -20,11 +26,13 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/qrcode-terminal": "^0.12.2",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.7",
     "tailwindcss": "^4",
+    "tsx": "^4.19.2",
     "typescript": "^5"
   }
 }
