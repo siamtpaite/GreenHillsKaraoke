@@ -1,7 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Image from 'next/image';
+
+const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE ?? '1180');
+const HOURS_START = 12;
+const HOURS_END = 22;
 
 interface Booking {
   id: string;
@@ -9,14 +13,56 @@ interface Booking {
   customerEmail: string;
   customerPhone: string;
   date: string;
+  startHour?: number;
   hours: number;
+  hourList?: string[];
   totalAmount: number;
   depositPaid: number;
+  amountDue?: number;
   status: string;
+  notes?: string;
   createdAt: any;
   checkInTime?: string;
   checkOutTime?: string;
 }
+
+interface OfflineForm {
+  customerName: string;
+  customerPhone: string;
+  customerEmail: string;
+  date: string;
+  startHour: number;
+  hours: number;
+  amountPaid: number;
+  notes: string;
+}
+
+function fmtHour(h: number): string {
+  if (h < 12) return `${h}:00 AM`;
+  if (h === 12) return '12:00 PM';
+  return `${h - 12}:00 PM`;
+}
+
+function bookingStartHour(b: Booking): number {
+  return b.startHour ?? Number(b.hourList?.[0] ?? HOURS_START);
+}
+
+const HOUR_OPTS = Array.from({ length: HOURS_END - HOURS_START }, (_, i) => HOURS_START + i);
+
+const EMPTY_FORM: OfflineForm = {
+  customerName: '',
+  customerPhone: '',
+  customerEmail: '',
+  date: '',
+  startHour: 14,
+  hours: 2,
+  amountPaid: HOURLY_RATE * 2,
+  notes: '',
+};
+
+const INPUT_CLS =
+  'w-full px-3 py-2 bg-slate-800/60 border border-cyan-400/30 rounded-lg text-white placeholder-cyan-300/30 focus:outline-none focus:border-cyan-300 text-sm';
+const LABEL_CLS = 'block text-cyan-300/70 text-xs mb-1';
 
 export default function AdminDashboard() {
   const [authenticated, setAuthenticated] = useState(false);
@@ -25,6 +71,13 @@ export default function AdminDashboard() {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const [showModal, setShowModal] = useState(false);
+  const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
+  const [form, setForm] = useState<OfflineForm>({ ...EMPTY_FORM });
+  const [formError, setFormError] = useState('');
+  const [formLoading, setFormLoading] = useState(false);
+  const [formBookings, setFormBookings] = useState<Booking[]>([]);
 
   const ADMIN_PASSWORD = 'GreenHills2021';
 
@@ -42,77 +95,145 @@ export default function AdminDashboard() {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`/api/admin/bookings?date=${date || selectedDate}`);
+      const res = await fetch(`/api/admin/bookings?date=${date ?? selectedDate}`);
       const data = await res.json();
-      if (data.success) {
-        setBookings(data.data);
-      } else {
-        setError('Failed to fetch bookings');
-      }
-    } catch (err) {
+      if (data.success) setBookings(data.data);
+      else setError('Failed to fetch bookings');
+    } catch {
       setError('Error fetching bookings');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCheckIn = async (bookingId: string) => {
+  const fetchFormBookings = async (date: string) => {
     try {
-      const res = await fetch(`/api/admin/bookings/${bookingId}/checkin`, {
-        method: 'POST',
+      const res = await fetch(`/api/admin/bookings?date=${date}`);
+      const data = await res.json();
+      if (data.success) setFormBookings(data.data);
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (showModal && form.date) fetchFormBookings(form.date);
+  }, [showModal, form.date]);
+
+  const conflict = (() => {
+    if (!showModal) return null;
+    const slots = Array.from({ length: form.hours }, (_, i) => String(form.startHour + i));
+    const hit = formBookings.find((b) => {
+      if (b.id === editingBooking?.id) return false;
+      if (['cancelled', 'completed'].includes(b.status)) return false;
+      return (b.hourList ?? []).some((h) => slots.includes(h));
+    });
+    return hit ? `Slot taken by ${hit.customerName} (${fmtHour(bookingStartHour(hit))})` : null;
+  })();
+
+  const maxHours = Math.min(8, HOURS_END - form.startHour);
+  const expectedTotal = HOURLY_RATE * form.hours;
+
+  const setField = <K extends keyof OfflineForm>(k: K, v: OfflineForm[K]) =>
+    setForm((p) => ({ ...p, [k]: v }));
+
+  const openCreate = () => {
+    setEditingBooking(null);
+    setForm({ ...EMPTY_FORM, date: selectedDate });
+    setFormError('');
+    setShowModal(true);
+  };
+
+  const openEdit = (b: Booking) => {
+    setEditingBooking(b);
+    setForm({
+      customerName: b.customerName,
+      customerPhone: b.customerPhone,
+      customerEmail: b.customerEmail ?? '',
+      date: b.date,
+      startHour: bookingStartHour(b),
+      hours: b.hours,
+      amountPaid: b.depositPaid,
+      notes: b.notes ?? '',
+    });
+    setFormError('');
+    setShowModal(true);
+  };
+
+  const closeModal = () => {
+    setShowModal(false);
+    setEditingBooking(null);
+    setFormBookings([]);
+  };
+
+  const handleSubmit = async () => {
+    if (conflict) { setFormError(conflict); return; }
+    if (!form.customerName.trim()) { setFormError('Guest name is required'); return; }
+    if (!/^\d{10}$/.test(form.customerPhone.replace(/[^\d]/g, ''))) {
+      setFormError('Enter a valid 10-digit phone number'); return;
+    }
+    if (!form.date) { setFormError('Date is required'); return; }
+
+    setFormLoading(true);
+    setFormError('');
+    try {
+      const payload = {
+        ...form,
+        startHour: Number(form.startHour),
+        hours: Number(form.hours),
+        amountPaid: Number(form.amountPaid),
+        ...(editingBooking ? { bookingId: editingBooking.id } : {}),
+      };
+      const res = await fetch('/api/admin/bookings/manual', {
+        method: editingBooking ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
-      if (data.success) {
-        fetchBookings();
-      } else {
-        setError('Check-in failed');
-      }
-    } catch (err) {
-      setError('Error checking in');
+      if (!res.ok || !data.success) { setFormError(data.error ?? 'Failed to save booking'); return; }
+      closeModal();
+      if (form.date !== selectedDate) setSelectedDate(form.date);
+      fetchBookings(form.date);
+    } catch {
+      setFormError('Network error. Please try again.');
+    } finally {
+      setFormLoading(false);
     }
+  };
+
+  const handleCheckIn = async (bookingId: string) => {
+    try {
+      const res = await fetch(`/api/admin/bookings/${bookingId}/checkin`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) fetchBookings();
+      else setError('Check-in failed');
+    } catch { setError('Error checking in'); }
   };
 
   const handleCheckOut = async (bookingId: string) => {
     try {
-      const res = await fetch(`/api/admin/bookings/${bookingId}/checkout`, {
-        method: 'POST',
-      });
+      const res = await fetch(`/api/admin/bookings/${bookingId}/checkout`, { method: 'POST' });
       const data = await res.json();
-      if (data.success) {
-        fetchBookings();
-      } else {
-        setError('Check-out failed');
-      }
-    } catch (err) {
-      setError('Error checking out');
-    }
+      if (data.success) fetchBookings();
+      else setError('Check-out failed');
+    } catch { setError('Error checking out'); }
   };
 
   const handleCancel = async (bookingId: string) => {
     if (!confirm('Cancel this booking? Guest will be refunded.')) return;
     try {
-      const res = await fetch(`/api/admin/bookings/${bookingId}/cancel`, {
-        method: 'POST',
-      });
+      const res = await fetch(`/api/admin/bookings/${bookingId}/cancel`, { method: 'POST' });
       const data = await res.json();
-      if (data.success) {
-        fetchBookings();
-      } else {
-        setError('Cancellation failed');
-      }
-    } catch (err) {
-      setError('Error cancelling booking');
-    }
+      if (data.success) fetchBookings();
+      else setError('Cancellation failed');
+    } catch { setError('Error cancelling booking'); }
   };
 
   if (!authenticated) {
     return (
       <div className="min-h-screen bg-slate-950 relative overflow-hidden flex items-center justify-center py-12 px-4">
         <div className="fixed inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-20 left-10 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl animate-pulse"></div>
-          <div className="absolute bottom-20 right-10 w-96 h-96 bg-magenta-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }}></div>
+          <div className="absolute top-20 left-10 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl animate-pulse" />
+          <div className="absolute bottom-20 right-10 w-96 h-96 bg-magenta-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
         </div>
-
         <div className="max-w-md w-full relative z-10">
           <div className="backdrop-blur-xl bg-slate-900/50 border border-cyan-400/30 rounded-2xl p-8 shadow-2xl shadow-cyan-400/20">
             <div className="text-center mb-8">
@@ -122,7 +243,6 @@ export default function AdminDashboard() {
               </h1>
               <p className="text-cyan-300/70 text-sm mt-2">Prez Pu' Control Room</p>
             </div>
-
             <div className="space-y-4">
               <input
                 type="password"
@@ -149,11 +269,12 @@ export default function AdminDashboard() {
   return (
     <div className="min-h-screen bg-slate-950 relative overflow-hidden py-12 px-4">
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-20 left-10 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl animate-pulse"></div>
-        <div className="absolute bottom-20 right-10 w-96 h-96 bg-magenta-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }}></div>
+        <div className="absolute top-20 left-10 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl animate-pulse" />
+        <div className="absolute bottom-20 right-10 w-96 h-96 bg-magenta-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
       </div>
 
       <div className="max-w-6xl mx-auto relative z-10">
+        {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-magenta-300" style={{ textShadow: '0 0 20px rgba(0,217,255,0.4)' }}>
@@ -169,7 +290,8 @@ export default function AdminDashboard() {
           </button>
         </div>
 
-        <div className="mb-8 flex gap-4 items-center">
+        {/* Controls */}
+        <div className="mb-8 flex flex-wrap gap-3 items-center">
           <input
             type="date"
             value={selectedDate}
@@ -185,6 +307,12 @@ export default function AdminDashboard() {
           >
             🔄 Refresh
           </button>
+          <button
+            onClick={openCreate}
+            className="ml-auto bg-gradient-to-r from-violet-500 to-cyan-500 hover:from-violet-400 hover:to-cyan-400 text-white px-5 py-2 rounded-lg font-bold shadow-lg shadow-violet-500/30"
+          >
+            + Create Offline Booking
+          </button>
         </div>
 
         {error && (
@@ -193,6 +321,7 @@ export default function AdminDashboard() {
           </div>
         )}
 
+        {/* Booking list */}
         {loading ? (
           <div className="text-center text-cyan-300">Loading bookings...</div>
         ) : (
@@ -202,73 +331,289 @@ export default function AdminDashboard() {
                 <p className="text-cyan-300/70">No bookings for this date</p>
               </div>
             ) : (
-              bookings.map((booking) => (
-                <div
-                  key={booking.id}
-                  className="backdrop-blur-xl bg-slate-900/40 border border-cyan-400/20 rounded-xl p-6 hover:border-cyan-400/40 transition-all"
-                >
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
-                    <div>
-                      <p className="text-cyan-300/70 text-sm">Guest</p>
-                      <p className="text-white font-bold">{booking.customerName}</p>
+              bookings.map((booking) => {
+                const sh = bookingStartHour(booking);
+                return (
+                  <div
+                    key={booking.id}
+                    className="backdrop-blur-xl bg-slate-900/40 border border-cyan-400/20 rounded-xl p-6 hover:border-cyan-400/40 transition-all"
+                  >
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                      <div>
+                        <p className="text-cyan-300/70 text-sm">Guest</p>
+                        <p className="text-white font-bold">{booking.customerName}</p>
+                      </div>
+                      <div>
+                        <p className="text-cyan-300/70 text-sm">Time</p>
+                        <p className="text-white font-bold">
+                          {fmtHour(sh)} – {fmtHour(sh + booking.hours)}
+                          <span className="text-cyan-300/60 font-normal ml-1">({booking.hours}h)</span>
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-cyan-300/70 text-sm">Amount</p>
+                        <p className="text-magenta-300 font-bold">
+                          ₹{booking.totalAmount}
+                          {(booking.amountDue ?? 0) > 0 && (
+                            <span className="text-yellow-400 text-xs ml-1">(due ₹{booking.amountDue})</span>
+                          )}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-cyan-300/70 text-sm">Status</p>
+                        <p className={`font-bold text-sm ${
+                          booking.status === 'confirmed' ? 'text-green-400' :
+                          booking.status === 'checked_in' ? 'text-cyan-300' :
+                          booking.status === 'completed' ? 'text-cyan-400' :
+                          'text-yellow-400'
+                        }`}>
+                          {booking.status.toUpperCase()}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-cyan-300/70 text-sm">Time</p>
-                      <p className="text-white font-bold">{booking.hours} hour(s)</p>
-                    </div>
-                    <div>
-                      <p className="text-cyan-300/70 text-sm">Amount</p>
-                      <p className="text-magenta-300 font-bold">₹{booking.totalAmount}</p>
-                    </div>
-                    <div>
-                      <p className="text-cyan-300/70 text-sm">Status</p>
-                      <p className={`font-bold text-sm ${
-                        booking.status === 'confirmed' ? 'text-green-400' :
-                        booking.status === 'completed' ? 'text-cyan-400' :
-                        'text-yellow-400'
-                      }`}>
-                        {booking.status.toUpperCase()}
-                      </p>
-                    </div>
-                  </div>
 
-                  <div className="flex gap-2">
-                    {booking.status === 'confirmed' && (
-                      <button
-                        onClick={() => handleCheckIn(booking.id)}
-                        className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-400 hover:to-emerald-400 text-white px-4 py-2 rounded-lg font-bold text-sm"
-                      >
-                        ✅ Check In
-                      </button>
-                    )}
-                    {booking.status === 'checked_in' && (
-                      <button
-                        onClick={() => handleCheckOut(booking.id)}
-                        className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-400 hover:to-cyan-400 text-white px-4 py-2 rounded-lg font-bold text-sm"
-                      >
-                        🏁 Check Out
-                      </button>
-                    )}
-                    {['confirmed', 'checked_in'].includes(booking.status) && (
-                      <button
-                        onClick={() => handleCancel(booking.id)}
-                        className="bg-gradient-to-r from-pink-500 to-red-500 hover:from-pink-400 hover:to-red-400 text-white px-4 py-2 rounded-lg font-bold text-sm"
-                      >
-                        ❌ Cancel
-                      </button>
-                    )}
-                  </div>
+                    <div className="flex flex-wrap gap-2">
+                      {booking.status === 'confirmed' && (
+                        <button
+                          onClick={() => handleCheckIn(booking.id)}
+                          className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-400 hover:to-emerald-400 text-white px-4 py-2 rounded-lg font-bold text-sm"
+                        >
+                          ✅ Check In
+                        </button>
+                      )}
+                      {booking.status === 'checked_in' && (
+                        <button
+                          onClick={() => handleCheckOut(booking.id)}
+                          className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-400 hover:to-cyan-400 text-white px-4 py-2 rounded-lg font-bold text-sm"
+                        >
+                          🏁 Check Out
+                        </button>
+                      )}
+                      {['confirmed', 'checked_in', 'pending_full_payment'].includes(booking.status) && (
+                        <>
+                          <button
+                            onClick={() => openEdit(booking)}
+                            className="bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-400 hover:to-purple-400 text-white px-4 py-2 rounded-lg font-bold text-sm"
+                          >
+                            ✏️ Edit
+                          </button>
+                          <button
+                            onClick={() => handleCancel(booking.id)}
+                            className="bg-gradient-to-r from-pink-500 to-red-500 hover:from-pink-400 hover:to-red-400 text-white px-4 py-2 rounded-lg font-bold text-sm"
+                          >
+                            ❌ Cancel
+                          </button>
+                        </>
+                      )}
+                    </div>
 
-                  <div className="mt-4 pt-4 border-t border-slate-700/50 text-xs text-cyan-300/60 space-y-1">
-                    <p>📧 {booking.customerEmail}</p>
-                    <p>📱 {booking.customerPhone}</p>
+                    <div className="mt-4 pt-4 border-t border-slate-700/50 text-xs text-cyan-300/60 space-y-1">
+                      <p>📧 {booking.customerEmail || '—'}</p>
+                      <p>📱 {booking.customerPhone}</p>
+                      {booking.notes && <p>📝 {booking.notes}</p>}
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         )}
       </div>
+
+      {/* ── Offline Booking Modal ── */}
+      {showModal && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto flex items-start justify-center bg-slate-950/80 backdrop-blur-sm py-8 px-4"
+          onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}
+        >
+          <div className="w-full max-w-lg backdrop-blur-xl bg-slate-900/95 border border-cyan-400/30 rounded-2xl p-6 shadow-2xl shadow-cyan-400/20">
+            {/* Modal header */}
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-violet-300">
+                {editingBooking ? '✏️ Edit Booking' : '+ Offline Booking'}
+              </h2>
+              <button
+                onClick={closeModal}
+                className="text-cyan-300/60 hover:text-cyan-300 text-xl leading-none"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Row: name + phone */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={LABEL_CLS}>Guest Name *</label>
+                  <input
+                    type="text"
+                    placeholder="Full name"
+                    value={form.customerName}
+                    onChange={(e) => setField('customerName', e.target.value)}
+                    className={INPUT_CLS}
+                  />
+                </div>
+                <div>
+                  <label className={LABEL_CLS}>Phone *</label>
+                  <input
+                    type="tel"
+                    placeholder="10-digit number"
+                    value={form.customerPhone}
+                    onChange={(e) => setField('customerPhone', e.target.value)}
+                    className={INPUT_CLS}
+                  />
+                </div>
+              </div>
+
+              {/* Email */}
+              <div>
+                <label className={LABEL_CLS}>Email</label>
+                <input
+                  type="email"
+                  placeholder="guest@example.com"
+                  value={form.customerEmail}
+                  onChange={(e) => setField('customerEmail', e.target.value)}
+                  className={INPUT_CLS}
+                />
+              </div>
+
+              {/* Row: date + start hour */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={LABEL_CLS}>Date *</label>
+                  <input
+                    type="date"
+                    value={form.date}
+                    onChange={(e) => setField('date', e.target.value)}
+                    className={INPUT_CLS}
+                  />
+                </div>
+                <div>
+                  <label className={LABEL_CLS}>Start Hour *</label>
+                  <select
+                    value={form.startHour}
+                    onChange={(e) => {
+                      const sh = Number(e.target.value);
+                      const safeH = Math.min(form.hours, HOURS_END - sh);
+                      setForm((p) => ({
+                        ...p,
+                        startHour: sh,
+                        hours: safeH,
+                        ...(!editingBooking ? { amountPaid: HOURLY_RATE * safeH } : {}),
+                      }));
+                    }}
+                    className={INPUT_CLS}
+                  >
+                    {HOUR_OPTS.map((h) => (
+                      <option key={h} value={h}>{fmtHour(h)}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Row: hours + amount paid */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={LABEL_CLS}>Duration (hours) *</label>
+                  <select
+                    value={form.hours}
+                    onChange={(e) => {
+                      const h = Number(e.target.value);
+                      setForm((p) => ({
+                        ...p,
+                        hours: h,
+                        ...(!editingBooking ? { amountPaid: HOURLY_RATE * h } : {}),
+                      }));
+                    }}
+                    className={INPUT_CLS}
+                  >
+                    {Array.from({ length: maxHours }, (_, i) => i + 1).map((h) => (
+                      <option key={h} value={h}>{h} hour{h > 1 ? 's' : ''}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className={LABEL_CLS}>
+                    Amount Paid (₹)
+                    <span className="text-cyan-300/40 ml-1">expected ₹{expectedTotal}</span>
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={100}
+                    value={form.amountPaid}
+                    onChange={(e) => setField('amountPaid', Number(e.target.value))}
+                    className={INPUT_CLS}
+                  />
+                </div>
+              </div>
+
+              {/* Notes */}
+              <div>
+                <label className={LABEL_CLS}>Notes</label>
+                <input
+                  type="text"
+                  placeholder="Any special requests…"
+                  value={form.notes}
+                  onChange={(e) => setField('notes', e.target.value)}
+                  className={INPUT_CLS}
+                />
+              </div>
+
+              {/* Conflict warning */}
+              {conflict && (
+                <div className="p-3 bg-yellow-500/15 border border-yellow-400/40 rounded-lg text-yellow-300 text-sm">
+                  ⚠️ {conflict}
+                </div>
+              )}
+
+              {/* Form error */}
+              {formError && (
+                <div className="p-3 bg-pink-500/15 border border-pink-400/40 rounded-lg text-pink-300 text-sm">
+                  {formError}
+                </div>
+              )}
+
+              {/* Summary row */}
+              {form.date && (
+                <div className="p-3 bg-slate-800/40 rounded-lg text-xs text-cyan-300/70 space-y-1">
+                  <p>
+                    📅 {form.date} &nbsp;·&nbsp;
+                    ⏱ {fmtHour(form.startHour)} – {fmtHour(form.startHour + form.hours)} ({form.hours}h)
+                  </p>
+                  <p>
+                    💰 Total ₹{expectedTotal} &nbsp;·&nbsp; Paid ₹{form.amountPaid} &nbsp;·&nbsp;
+                    <span className={expectedTotal - form.amountPaid > 0 ? 'text-yellow-400' : 'text-green-400'}>
+                      Due ₹{Math.max(0, expectedTotal - form.amountPaid)}
+                    </span>
+                  </p>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex gap-3 pt-1">
+                <button
+                  onClick={closeModal}
+                  className="flex-1 py-2 bg-slate-800/60 border border-slate-600 text-cyan-300 rounded-lg hover:border-slate-500 text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSubmit}
+                  disabled={formLoading || !!conflict}
+                  className="flex-1 py-2 bg-gradient-to-r from-cyan-500 to-violet-500 hover:from-cyan-400 hover:to-violet-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-lg text-sm shadow-lg shadow-cyan-500/30"
+                >
+                  {formLoading
+                    ? 'Saving…'
+                    : editingBooking
+                    ? 'Save Changes'
+                    : 'Create Booking'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
