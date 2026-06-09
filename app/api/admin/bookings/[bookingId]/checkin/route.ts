@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase/admin';
-import { sendWhatsAppNotification } from '@/lib/whatsapp/baileys-send';
+import { sendWhatsAppNotification, formatCustomerJid } from '@/lib/whatsapp/baileys-send';
 
 export async function POST(
   req: NextRequest,
@@ -41,14 +41,20 @@ export async function POST(
       checkInTime: now,
     });
 
-    await sendWhatsAppNotification({
+    const waPayload = {
       bookingId,
       customerName: booking.customerName,
       date: booking.date,
       hours: booking.hours,
       totalAmount: booking.totalAmount,
-      eventType: 'checked_in',
-    });
+    };
+
+    await sendWhatsAppNotification({ ...waPayload, eventType: 'checked_in' });
+
+    sendWhatsAppNotification(
+      { ...waPayload, eventType: 'customer_checked_in' },
+      formatCustomerJid(booking.customerPhone)
+    ).catch((err) => console.error('[Check-in] Customer WA failed:', err));
 
     return NextResponse.json({ success: true, data: { status: 'checked_in', checkInTime: now } });
   } catch (error) {

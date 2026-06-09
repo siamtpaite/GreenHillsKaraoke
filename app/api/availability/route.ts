@@ -42,18 +42,14 @@ export async function GET(request: NextRequest) {
       // Slots might already exist, continue
     }
 
-    // Fetch availability and return only open slots to the client
+    // Fetch availability and return all slots so the UI can grey out booked ones
     const availability = await getAvailability(date);
-    const availableSlots = availability.slots.filter((slot) => slot.status === 'available');
 
     return NextResponse.json(
       {
         success: true,
         message: 'Availability fetched successfully',
-        data: {
-          ...availability,
-          slots: availableSlots,
-        },
+        data: availability,
       },
       { status: 200 }
     );

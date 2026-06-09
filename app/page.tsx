@@ -38,6 +38,9 @@ export default function BookingPage() {
     depositAmount: 500,
   });
 
+  const [cancelLoading, setCancelLoading] = useState(false);
+  const [bookingCancelled, setBookingCancelled] = useState(false);
+
   const fetchAvailability = async (date: string) => {
     setLoading(true);
     setError('');
@@ -168,6 +171,28 @@ export default function BookingPage() {
     document.body.appendChild(script);
   };
 
+  const handleCancelBooking = async () => {
+    const confirmed = window.confirm(
+      '⚠️ WARNING: Cancellation will forfeit your ₹500 non-refundable deposit. Continue?'
+    );
+    if (!confirmed) return;
+    setCancelLoading(true);
+    setError('');
+    try {
+      const res = await fetch(`/api/bookings/${bookingData.bookingId}/cancel`, { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setBookingCancelled(true);
+      } else {
+        setError(data.error || 'Cancellation failed');
+      }
+    } catch {
+      setError('Error cancelling booking');
+    } finally {
+      setCancelLoading(false);
+    }
+  };
+
   const getMinDate = () => {
     const today = new Date();
     return today.toISOString().split('T')[0];
@@ -288,14 +313,19 @@ export default function BookingPage() {
                   {availability.slots.map((slot) => (
                   <button
                     key={slot.hour}
-                    onClick={() => toggleSlot(slot.hour)}
-                    disabled={slot.status !== 'available' && !selectedSlots.includes(slot.hour)}
+                    onClick={() => {
+                      if (slot.status !== 'available') {
+                        alert('This slot is already taken. Please choose another time.');
+                        return;
+                      }
+                      toggleSlot(slot.hour);
+                    }}
                     className={`p-4 rounded-lg font-bold transition-all text-sm ${
                       selectedSlots.includes(slot.hour)
                         ? 'bg-gradient-to-r from-cyan-400 to-magenta-400 text-slate-900 shadow-lg shadow-magenta-400/60 scale-105'
                         : slot.status === 'available'
                         ? 'bg-slate-800/60 border border-magenta-400/40 text-magenta-300 hover:border-magenta-300/80 hover:shadow-lg hover:shadow-magenta-400/30 transition-all'
-                        : 'bg-slate-800/30 border border-slate-700 text-slate-500 cursor-not-allowed'
+                        : 'bg-slate-800/30 border border-slate-700 text-slate-500 cursor-not-allowed opacity-50'
                     }`}
                   >
                     {slot.timeSlot}
@@ -466,37 +496,76 @@ export default function BookingPage() {
 
           {step === 'confirmation' && (
             <div className="text-center space-y-6 relative z-10">
-              <div className="text-6xl animate-in zoom-in duration-500">🎉</div>
-              <div>
-                <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-magenta-300 mb-2 animate-text-glow" 
-                    style={{ textShadow: '0 0 20px rgba(0,217,255,0.4)' }}>
-                  You're In!
-                </h2>
-                <p className="text-cyan-300/80">Your night is booked</p>
-              </div>
-              <div className="bg-gradient-to-r from-cyan-500/15 to-magenta-500/15 border border-cyan-400/30 p-6 rounded-lg text-left space-y-3 shadow-lg shadow-cyan-400/10">
-                <div>
-                  <p className="text-cyan-300/70 text-sm">Booking ID</p>
-                  <p className="text-white font-mono font-bold">{bookingData.bookingId}</p>
-                </div>
-                <div>
-                  <p className="text-cyan-300/70 text-sm">Guest</p>
-                  <p className="text-white font-bold">{formData.customerName}</p>
-                </div>
-              </div>
-              <p className="text-cyan-300/80">Confirmation sent to <span className="text-white font-bold">{formData.customerEmail}</span></p>
-              <button
-                onClick={() => {
-                  setStep('date');
-                  setSelectedDate('');
-                  setSelectedSlots([]);
-                  setFormData({ customerName: '', customerEmail: '', customerPhone: '', vipMember: false });
-                  setAvailability(null);
-                }}
-                className="w-full bg-gradient-to-r from-magenta-500 to-pink-500 hover:from-magenta-400 hover:to-pink-400 text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-magenta-400/60"
-              >
-                Book Another Slot
-              </button>
+              {bookingCancelled ? (
+                <>
+                  <div className="text-6xl animate-in zoom-in duration-500">❌</div>
+                  <div>
+                    <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-300 to-red-300 mb-2">
+                      Booking Cancelled
+                    </h2>
+                    <p className="text-pink-300/80">Your ₹500 deposit has been forfeited.</p>
+                  </div>
+                  <div className="bg-gradient-to-r from-pink-500/10 to-red-500/10 border border-pink-400/30 p-4 rounded-lg text-left">
+                    <p className="text-pink-300/70 text-sm">Booking ID</p>
+                    <p className="text-white font-mono font-bold">{bookingData.bookingId}</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setStep('date');
+                      setSelectedDate('');
+                      setSelectedSlots([]);
+                      setFormData({ customerName: '', customerEmail: '', customerPhone: '', vipMember: false });
+                      setAvailability(null);
+                      setBookingCancelled(false);
+                    }}
+                    className="w-full bg-gradient-to-r from-magenta-500 to-pink-500 hover:from-magenta-400 hover:to-pink-400 text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-magenta-400/60"
+                  >
+                    Book Another Slot
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="text-6xl animate-in zoom-in duration-500">🎉</div>
+                  <div>
+                    <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-magenta-300 mb-2 animate-text-glow"
+                        style={{ textShadow: '0 0 20px rgba(0,217,255,0.4)' }}>
+                      You're In!
+                    </h2>
+                    <p className="text-cyan-300/80">Your night is booked</p>
+                  </div>
+                  <div className="bg-gradient-to-r from-cyan-500/15 to-magenta-500/15 border border-cyan-400/30 p-6 rounded-lg text-left space-y-3 shadow-lg shadow-cyan-400/10">
+                    <div>
+                      <p className="text-cyan-300/70 text-sm">Booking ID</p>
+                      <p className="text-white font-mono font-bold">{bookingData.bookingId}</p>
+                    </div>
+                    <div>
+                      <p className="text-cyan-300/70 text-sm">Guest</p>
+                      <p className="text-white font-bold">{formData.customerName}</p>
+                    </div>
+                  </div>
+                  <p className="text-cyan-300/80">Confirmation sent to <span className="text-white font-bold">{formData.customerEmail}</span></p>
+                  {error && <p className="text-pink-400 font-semibold">{error}</p>}
+                  <button
+                    onClick={() => {
+                      setStep('date');
+                      setSelectedDate('');
+                      setSelectedSlots([]);
+                      setFormData({ customerName: '', customerEmail: '', customerPhone: '', vipMember: false });
+                      setAvailability(null);
+                    }}
+                    className="w-full bg-gradient-to-r from-magenta-500 to-pink-500 hover:from-magenta-400 hover:to-pink-400 text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-magenta-400/60"
+                  >
+                    Book Another Slot
+                  </button>
+                  <button
+                    onClick={handleCancelBooking}
+                    disabled={cancelLoading}
+                    className="w-full bg-slate-800/50 border border-red-500/40 hover:border-red-400/70 disabled:opacity-50 text-red-400 hover:text-red-300 font-bold py-3 rounded-lg transition-all"
+                  >
+                    {cancelLoading ? 'Cancelling...' : 'Cancel Booking'}
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>

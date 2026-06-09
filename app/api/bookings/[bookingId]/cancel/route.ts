@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cancelBooking, getBooking } from '@/lib/booking/service';
 import { ApiResponse } from '@/lib/types';
+import { sendWhatsAppNotification, formatCustomerJid } from '@/lib/whatsapp/baileys-send';
 
 /**
  * POST /api/bookings/[bookingId]/cancel
@@ -49,6 +50,25 @@ export async function POST(
 
     // Cancel the booking (releases slots)
     await cancelBooking(bookingId);
+
+    const waPayload = {
+      bookingId,
+      customerName: booking.customerName,
+      date: booking.date,
+      hours: booking.hours,
+      totalAmount: booking.totalAmount,
+    };
+
+    // Notify customer
+    sendWhatsAppNotification(
+      { ...waPayload, eventType: 'customer_cancelled' },
+      formatCustomerJid(booking.customerPhone)
+    ).catch((err) => console.error('[Cancel] Customer WA failed:', err));
+
+    // Notify admin group
+    sendWhatsAppNotification(
+      { ...waPayload, eventType: 'cancelled' }
+    ).catch((err) => console.error('[Cancel] Admin WA failed:', err));
 
     return NextResponse.json(
       {

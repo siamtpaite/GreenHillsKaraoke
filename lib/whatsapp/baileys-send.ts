@@ -10,7 +10,14 @@ interface WhatsAppMessage {
     | 'customer_booking_confirmed'
     | 'checked_in'
     | 'checked_out'
-    | 'cancelled';
+    | 'cancelled'
+    | 'customer_checked_in'
+    | 'customer_checked_out'
+    | 'customer_cancelled';
+}
+
+export function formatCustomerJid(phone: string): string {
+  return `91${phone.replace(/[^\d]/g, '')}@s.whatsapp.net`;
 }
 
 // The WhatsApp connection lives in a single standalone process
@@ -65,6 +72,9 @@ function formatWhatsAppMessage(message: WhatsAppMessage): string {
     checked_in: `✅ *GUEST CHECKED IN*\n\n👤 ${message.customerName}\n📅 ${message.date}\n⏱️ ${message.hours} hour(s)`,
     checked_out: `🏁 *SESSION COMPLETED*\n\n👤 ${message.customerName}\n💰 Final: ₹${message.totalAmount}`,
     cancelled: `❌ *BOOKING CANCELLED*\n\n👤 ${message.customerName}\n📅 ${message.date}\n💵 Refund: ₹500 (non-refundable)`,
+    customer_checked_in: `✅ *CHECK-IN CONFIRMED*\n\nWelcome to Green Hills Karaoke!\n📅 ${message.date}\n⏱️ ${message.hours} hour(s)\n🔖 Booking ID: ${message.bookingId}\n\nEnjoy your session! 🎤`,
+    customer_checked_out: `✅ *SESSION COMPLETED*\n\nThank you for visiting Green Hills Karaoke!\n🔖 Booking ID: ${message.bookingId}\n\nSee you again soon! 🎤`,
+    customer_cancelled: `❌ *BOOKING CANCELLED*\n\nYour booking has been cancelled.\n📅 ${message.date}\n💵 Note: ₹500 deposit is non-refundable.\n🔖 Booking ID: ${message.bookingId}`,
   };
 
   return events[message.eventType];

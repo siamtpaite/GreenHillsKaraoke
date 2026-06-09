@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase/admin';
-import { sendWhatsAppNotification } from '@/lib/whatsapp/baileys-send';
+import { sendWhatsAppNotification, formatCustomerJid } from '@/lib/whatsapp/baileys-send';
 
 export async function POST(
   req: NextRequest,
@@ -53,14 +53,20 @@ export async function POST(
 
     await batch.commit();
 
-    await sendWhatsAppNotification({
+    const waPayload = {
       bookingId,
       customerName: booking.customerName,
       date: booking.date,
       hours: booking.hours,
       totalAmount: booking.totalAmount,
-      eventType: 'cancelled',
-    });
+    };
+
+    await sendWhatsAppNotification({ ...waPayload, eventType: 'cancelled' });
+
+    sendWhatsAppNotification(
+      { ...waPayload, eventType: 'customer_cancelled' },
+      formatCustomerJid(booking.customerPhone)
+    ).catch((err) => console.error('[Admin Cancel] Customer WA failed:', err));
 
     return NextResponse.json({ success: true, data: { status: 'cancelled', cancelledAt: now } });
   } catch (error) {
