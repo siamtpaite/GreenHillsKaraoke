@@ -124,7 +124,7 @@ export async function initializeSlotsForDate(date: string): Promise<void> {
       status: 'available',
       hour,
       createdAt: serverTimestamp(),
-    });
+    }, { merge: true });
   }
 
   await batch.commit();
