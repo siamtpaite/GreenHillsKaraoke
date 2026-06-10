@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createBooking } from '@/lib/booking/service';
+import { createBooking, cancelBooking } from '@/lib/booking/service';
 import { areHoursAvailable, initializeSlotsForDate } from '@/lib/utils/availability';
 import { createRazorpayOrder } from '@/lib/payment/razorpay';
 import { BookingRequest, ApiResponse } from '@/lib/types';
@@ -104,13 +104,29 @@ export async function POST(request: NextRequest) {
       customerPhone,
     } as BookingRequest);
 
-    // Create Razorpay order for deposit
-    const razorpayOrder = await createRazorpayOrder(
-      DEPOSIT_AMOUNT * 100, // Convert to paise
-      bookingId,
-      customerEmail,
-      customerPhone
-    );
+    // Create Razorpay order for deposit.
+    // If this fails the booking+slots must be rolled back — otherwise the slot
+    // stays locked and every retry gets "slots already booked".
+    let razorpayOrder;
+    try {
+      razorpayOrder = await createRazorpayOrder(
+        DEPOSIT_AMOUNT * 100,
+        bookingId,
+        customerEmail,
+        customerPhone
+      );
+    } catch (razorpayError) {
+      console.error(`[initiate] Razorpay failed for ${bookingId}, rolling back:`, razorpayError);
+      try {
+        await cancelBooking(bookingId);
+      } catch (rollbackErr) {
+        console.error(`[initiate] Rollback failed for ${bookingId}:`, rollbackErr);
+      }
+      return NextResponse.json(
+        { success: false, error: 'Payment gateway unavailable. Please try again.' } as ApiResponse<null>,
+        { status: 503 }
+      );
+    }
 
     return NextResponse.json(
       {

@@ -2,7 +2,8 @@ import Razorpay from 'razorpay';
 import crypto from 'crypto';
 
 function getRazorpayClient() {
-  const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
+  // NEXT_PUBLIC_ prefix is for client bundles; server-side uses the unprefixed var.
+  const keyId = process.env.RAZORPAY_KEY_ID || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
 
   if (!keyId || !keySecret) {
