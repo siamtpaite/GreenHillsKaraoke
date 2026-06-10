@@ -30,6 +30,9 @@ async function initBaileys() {
     version,
     auth: state,
     browser: ['Green Hills Karaoke', 'Chrome', '1.0.0'],
+    syncFullHistory: false,
+    downloadHistory: false,
+    getMessage: async () => undefined,
   });
 
   sock.ev.on('creds.update', saveCreds);
