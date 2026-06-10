@@ -265,7 +265,7 @@ export default function AdminDashboard() {
   };
 
   const handleCancel = async (bookingId: string) => {
-    if (!confirm('Cancel this booking? Guest will be refunded.')) return;
+    if (!confirm('⚠️ Cancel this booking? Guest loses ₹500 non-refundable deposit. Continue?')) return;
     try {
       const res = await fetch(`/api/admin/bookings/${bookingId}/cancel`, { method: 'POST' });
       const data = await res.json();
