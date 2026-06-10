@@ -4,7 +4,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { Booking, ApiResponse } from '@/lib/types';
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'GreenHills2021';
-const ACTIVE_STATUSES = ['confirmed', 'pending_full_payment', 'checked_in'];
+const ACTIVE_STATUSES = ['confirmed', 'pending_full_payment', 'checked_in', 'pending_payment'];
 const BATCH_LIMIT = 500;
 
 export async function POST(req: NextRequest) {
