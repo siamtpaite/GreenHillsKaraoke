@@ -111,11 +111,15 @@ export async function getAvailability(date: string): Promise<AvailabilityRespons
 }
 
 /**
- * Initialize slots for a date (called once per date)
+ * Initialize slots for a date — only runs if no slots exist yet.
+ * Skips entirely when slots are already present so booked slots aren't overwritten.
  */
 export async function initializeSlotsForDate(date: string): Promise<void> {
-  const hours = await getOperatingHours(date);
+  const slotsRef = collection(db, `availability/${date}/slots`);
+  const existing = await getDocs(slotsRef);
+  if (!existing.empty) return;
 
+  const hours = await getOperatingHours(date);
   const batch = writeBatch(db);
 
   for (let hour = hours.open; hour < hours.close; hour++) {
@@ -124,7 +128,7 @@ export async function initializeSlotsForDate(date: string): Promise<void> {
       status: 'available',
       hour,
       createdAt: serverTimestamp(),
-    }, { merge: true });
+    });
   }
 
   await batch.commit();
