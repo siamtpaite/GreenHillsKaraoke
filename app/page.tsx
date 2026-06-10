@@ -135,21 +135,27 @@ export default function BookingPage() {
       description: `Booking for ${selectedDate} - ${selectedSlots.length} hour(s)`,
       handler: async (response: any) => {
         try {
-          const res = await fetch('/api/webhooks/razorpay', {
+          const res = await fetch('/api/bookings/confirm', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              razorpay_order_id: response.razorpay_order_id,
               razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_order_id: response.razorpay_order_id,
               razorpay_signature: response.razorpay_signature,
               bookingId: bookingData.bookingId,
+              date: selectedDate,
+              startHour: selectedSlots[0],
+              hours: selectedSlots.length,
+              customerName: formData.customerName,
+              customerEmail: formData.customerEmail,
+              customerPhone: formData.customerPhone,
             }),
           });
           const data = await res.json();
           if (data.success) {
             setStep('confirmation');
           } else {
-            setError('Payment verification failed');
+            setError(data.error || 'Payment verification failed');
           }
         } catch (err) {
           setError('Payment verification error');

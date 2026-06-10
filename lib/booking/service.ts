@@ -13,81 +13,59 @@ const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '1180');
 const DEPOSIT_AMOUNT = parseInt(process.env.DEPOSIT_AMOUNT || '500');
 
 /**
- * Create a new booking with Firestore transaction
- * This prevents double-booking by using atomic transactions
+ * Atomically check slot availability, lock all slots, and create a confirmed booking.
+ * Called only after Razorpay payment signature is verified.
+ * Throws an error prefixed with 'SLOT_CONFLICT' if any slot is no longer available.
  */
-export async function createBooking(
-  req: BookingRequest
-): Promise<{ bookingId: string; order: any }> {
-  const bookingId = adminDb.collection('bookings').doc().id;
+export async function lockAndConfirmBooking(
+  bookingId: string,
+  req: BookingRequest,
+  razorpayPaymentId: string,
+  razorpayOrderId: string
+): Promise<void> {
   const hourList = generateHourList(req.startHour, req.hours);
   const totalAmount = HOURLY_RATE * req.hours;
 
-  try {
-    // Attempt to lock slots in transaction
-    await runTransaction(db, async (transaction) => {
-      // 1. Check all slots are available
-      for (const hour of hourList) {
-        const slotRef = doc(db, `availability/${req.date}/slots/${hour}`);
-        const slotSnap = await transaction.get(slotRef);
-
-        if (
-          !slotSnap.exists() ||
-          slotSnap.data().status !== 'available'
-        ) {
-          throw new Error(
-            `Slot ${req.date} ${hour}:00 is already booked or unavailable`
-          );
-        }
+  await runTransaction(db, async (transaction) => {
+    // 1. Read all slots and fail fast on any conflict
+    for (const hour of hourList) {
+      const slotRef = doc(db, `availability/${req.date}/slots/${hour}`);
+      const slotSnap = await transaction.get(slotRef);
+      if (slotSnap.exists() && slotSnap.data().status !== 'available') {
+        throw new Error(`SLOT_CONFLICT: ${req.date} ${hour}:00 is no longer available`);
       }
+    }
 
-      // 2. Lock all slots
-      for (const hour of hourList) {
-        const slotRef = doc(db, `availability/${req.date}/slots/${hour}`);
-        transaction.update(slotRef, {
-          status: 'booked',
-          bookingId,
-          bookedAt: serverTimestamp(),
-        });
-      }
+    // 2. Lock all slots (set covers both existing and initialised-for-first-time docs)
+    for (const hour of hourList) {
+      const slotRef = doc(db, `availability/${req.date}/slots/${hour}`);
+      transaction.set(slotRef, {
+        status: 'booked',
+        bookingId,
+        bookedAt: serverTimestamp(),
+        hour: parseInt(hour),
+      });
+    }
 
-      // 3. Create booking record with status "pending_payment"
-      const bookingRef = doc(db, `bookings/${bookingId}`);
-      transaction.set(bookingRef, {
-        id: bookingId,
-        customerName: req.customerName,
-        customerEmail: req.customerEmail,
-        customerPhone: req.customerPhone,
-        date: req.date,
-        hours: req.hours,
-        hourList,
-        depositPaid: 0, // Will be updated after payment
-        totalAmount,
-        amountDue: totalAmount - DEPOSIT_AMOUNT,
-        status: 'pending_payment', // Awaiting deposit payment
-        createdAt: serverTimestamp(),
-      } as Partial<Booking>);
-    });
-
-    // 4. Return booking ID and prepare for Razorpay
-    return {
-      bookingId,
-      order: {
-        amount: DEPOSIT_AMOUNT * 100, // Razorpay expects amount in paise
-        currency: 'INR',
-        receipt: bookingId,
-        notes: {
-          bookingId,
-          customerEmail: req.customerEmail,
-          date: req.date,
-          hours: req.hours,
-        },
-      },
-    };
-  } catch (error) {
-    console.error('Booking creation failed:', error);
-    throw error;
-  }
+    // 3. Create booking as confirmed — deposit already paid
+    const bookingRef = doc(db, `bookings/${bookingId}`);
+    transaction.set(bookingRef, {
+      id: bookingId,
+      customerName: req.customerName,
+      customerEmail: req.customerEmail,
+      customerPhone: req.customerPhone,
+      date: req.date,
+      hours: req.hours,
+      hourList,
+      depositPaid: DEPOSIT_AMOUNT,
+      totalAmount,
+      amountDue: totalAmount - DEPOSIT_AMOUNT,
+      status: 'confirmed',
+      razorpayPaymentId,
+      razorpayOrderId,
+      createdAt: serverTimestamp(),
+    } as Partial<Booking>);
+  });
 }
 
 /**
