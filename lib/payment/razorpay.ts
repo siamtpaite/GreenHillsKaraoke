@@ -27,16 +27,14 @@ export async function createRazorpayOrder(
 ): Promise<any> {
   const razorpay = getRazorpayClient();
   const options = {
-    amount, // in paise
+    amount,
     currency: 'INR',
     receipt: bookingId,
-    payment_capture: 1, // Auto-capture payment
-    customer_notify: 1,
-    email: customerEmail,
-    contact: customerPhone,
     notes: {
       bookingId,
       purpose: 'karaoke_deposit',
+      customerEmail,
+      customerPhone,
     },
   };
 

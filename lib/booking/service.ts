@@ -2,8 +2,8 @@ import {
   doc,
   serverTimestamp,
   runTransaction,
-  getDoc,
 } from 'firebase/firestore';
+import { FieldValue } from 'firebase-admin/firestore';
 import { adminDb } from '../firebase/admin';
 import { db } from '../firebase/config';
 import { Booking, BookingRequest } from '../types';
@@ -98,21 +98,18 @@ export async function confirmBookingPayment(
   razorpayPaymentId: string,
   razorpayOrderId: string
 ): Promise<void> {
-  const bookingRef = doc(adminDb, `bookings/${bookingId}`);
+  const bookingRef = adminDb.doc(`bookings/${bookingId}`);
 
   await adminDb.runTransaction(async (transaction) => {
     const bookingSnap = await transaction.get(bookingRef);
 
-    if (!bookingSnap.exists()) {
+    if (!bookingSnap.exists) {
       throw new Error('Booking not found');
     }
 
-    const booking = bookingSnap.data() as Booking;
-
-    // Update booking with payment confirmation
     transaction.update(bookingRef, {
       depositPaid: DEPOSIT_AMOUNT,
-      status: 'pending_full_payment', // Deposit locked, awaiting full payment on arrival
+      status: 'pending_full_payment',
       razorpayPaymentId,
       razorpayOrderId,
     });
@@ -123,23 +120,18 @@ export async function confirmBookingPayment(
  * Cancel a booking and release slots
  */
 export async function cancelBooking(bookingId: string): Promise<void> {
-  const bookingRef = doc(adminDb, `bookings/${bookingId}`);
-  const bookingSnap = await getDoc(bookingRef);
+  const bookingRef = adminDb.doc(`bookings/${bookingId}`);
+  const bookingSnap = await bookingRef.get();
 
-  if (!bookingSnap.exists()) {
+  if (!bookingSnap.exists) {
     throw new Error('Booking not found');
   }
 
   const booking = bookingSnap.data() as Booking;
 
-  // Use transaction to release all slots
   await adminDb.runTransaction(async (transaction) => {
-    // Release all hours
     for (const hour of booking.hourList) {
-      const slotRef = doc(
-        adminDb,
-        `availability/${booking.date}/slots/${hour}`
-      );
+      const slotRef = adminDb.doc(`availability/${booking.date}/slots/${hour}`);
       transaction.update(slotRef, {
         status: 'available',
         bookingId: null,
@@ -147,10 +139,9 @@ export async function cancelBooking(bookingId: string): Promise<void> {
       });
     }
 
-    // Mark booking as cancelled
     transaction.update(bookingRef, {
       status: 'cancelled',
-      cancelledAt: serverTimestamp(),
+      cancelledAt: FieldValue.serverTimestamp(),
     });
   });
 }
@@ -159,21 +150,17 @@ export async function cancelBooking(bookingId: string): Promise<void> {
  * Get booking by ID
  */
 export async function getBooking(bookingId: string): Promise<Booking | null> {
-  const bookingRef = doc(adminDb, `bookings/${bookingId}`);
-  const bookingSnap = await getDoc(bookingRef);
-
-  return bookingSnap.exists() ? (bookingSnap.data() as Booking) : null;
+  const bookingSnap = await adminDb.doc(`bookings/${bookingId}`).get();
+  return bookingSnap.exists ? (bookingSnap.data() as Booking) : null;
 }
 
 /**
  * Mark booking as completed (after customer checks out)
  */
 export async function completeBooking(bookingId: string): Promise<void> {
-  const bookingRef = doc(adminDb, `bookings/${bookingId}`);
-
-  await adminDb.update(bookingRef, {
+  await adminDb.doc(`bookings/${bookingId}`).update({
     status: 'completed',
-    checkOutTime: serverTimestamp(),
+    checkOutTime: FieldValue.serverTimestamp(),
   });
 }
 
@@ -181,9 +168,5 @@ export async function completeBooking(bookingId: string): Promise<void> {
  * Mark booking as no-show
  */
 export async function markAsNoShow(bookingId: string): Promise<void> {
-  const bookingRef = doc(adminDb, `bookings/${bookingId}`);
-
-  await adminDb.update(bookingRef, {
-    status: 'no_show',
-  });
+  await adminDb.doc(`bookings/${bookingId}`).update({ status: 'no_show' });
 }
