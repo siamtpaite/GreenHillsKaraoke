@@ -31,6 +31,7 @@ export interface Slot {
 // Availability response
 export interface AvailabilityResponse {
   date: string;
+  blackout?: boolean;
   slots: Array<{
     hour: number;
     status: 'available' | 'booked' | 'blackout';

@@ -80,10 +80,7 @@ const dayOfWeek = new Date(date).toLocaleDateString('en-US', {
 export async function getAvailability(date: string): Promise<AvailabilityResponse> {
   // Check if blackout
   if (await isBlackoutDate(date)) {
-    return {
-      date,
-      slots: [],
-    };
+    return { date, blackout: true, slots: [] };
   }
 
   const hours = await getOperatingHours(date);

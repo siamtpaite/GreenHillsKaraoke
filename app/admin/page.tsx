@@ -10,7 +10,7 @@ const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE ?? '1180');
 const HOURS_START = 12;
 const HOURS_END = 22;
 
-type AdminTab = 'bookings' | 'analytics';
+type AdminTab = 'bookings' | 'analytics' | 'blackout';
 type AnalyticsPeriod = 'today' | 'week' | 'month';
 
 interface Booking {
@@ -41,6 +41,20 @@ interface OfflineForm {
   hours: number;
   amountPaid: number;
   notes: string;
+}
+
+interface BlackoutDate {
+  id: string;
+  date: string;
+  reason: string;
+  createdBy: string;
+  createdAt: any;
+}
+
+interface BlackoutForm {
+  startDate: string;
+  endDate: string;
+  reason: string;
 }
 
 interface AnalyticsData {
@@ -110,6 +124,12 @@ export default function AdminDashboard() {
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
 
+  const [blackoutDates, setBlackoutDates] = useState<BlackoutDate[]>([]);
+  const [blackoutLoading, setBlackoutLoading] = useState(false);
+  const [blackoutForm, setBlackoutForm] = useState<BlackoutForm>({ startDate: '', endDate: '', reason: '' });
+  const [blackoutSubmitting, setBlackoutSubmitting] = useState(false);
+  const [blackoutError, setBlackoutError] = useState('');
+
   const ADMIN_PASSWORD = 'GreenHills2021';
 
   const handleLogin = () => {
@@ -145,6 +165,68 @@ export default function AdminDashboard() {
     } catch {}
   };
 
+  const fetchBlackoutDates = async () => {
+    setBlackoutLoading(true);
+    try {
+      const res = await fetch('/api/admin/blackout-dates');
+      const data = await res.json();
+      if (data.success) setBlackoutDates(data.data);
+    } catch {}
+    finally { setBlackoutLoading(false); }
+  };
+
+  const expandDateRange = (start: string, end: string): string[] => {
+    const dates: string[] = [];
+    const cur = new Date(start + 'T12:00');
+    const last = new Date(end + 'T12:00');
+    while (cur <= last) {
+      dates.push(cur.toISOString().split('T')[0]);
+      cur.setDate(cur.getDate() + 1);
+    }
+    return dates;
+  };
+
+  const handleBlockDates = async () => {
+    const { startDate, endDate, reason } = blackoutForm;
+    if (!startDate) { setBlackoutError('Please select a date.'); return; }
+    const effectiveEnd = endDate && endDate >= startDate ? endDate : startDate;
+    const dates = expandDateRange(startDate, effectiveEnd).map((date) => ({ date, reason }));
+
+    setBlackoutSubmitting(true);
+    setBlackoutError('');
+    try {
+      const res = await fetch('/api/admin/blackout-dates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: ADMIN_PASSWORD, dates }),
+      });
+      const data = await res.json();
+      if (!data.success) { setBlackoutError(data.error ?? 'Failed to block dates'); return; }
+      setBlackoutForm({ startDate: '', endDate: '', reason: '' });
+      fetchBlackoutDates();
+    } catch {
+      setBlackoutError('Network error. Please try again.');
+    } finally {
+      setBlackoutSubmitting(false);
+    }
+  };
+
+  const handleUnblockDate = async (date: string) => {
+    if (!confirm(`Unblock ${fmtDate(date)}? Customers will be able to book this date again.`)) return;
+    try {
+      const res = await fetch(`/api/admin/blackout-dates/${date}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: ADMIN_PASSWORD }),
+      });
+      const data = await res.json();
+      if (data.success) fetchBlackoutDates();
+      else setBlackoutError(data.error ?? 'Failed to unblock date');
+    } catch {
+      setBlackoutError('Network error. Please try again.');
+    }
+  };
+
   const fetchAnalytics = async (period: AnalyticsPeriod = analyticsPeriod) => {
     setAnalyticsLoading(true);
     try {
@@ -164,6 +246,10 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (authenticated && activeTab === 'analytics') fetchAnalytics(analyticsPeriod);
   }, [authenticated, activeTab, analyticsPeriod]);
+
+  useEffect(() => {
+    if (authenticated && activeTab === 'blackout') fetchBlackoutDates();
+  }, [authenticated, activeTab]);
 
   const conflict = (() => {
     if (!showModal) return null;
@@ -338,18 +424,22 @@ export default function AdminDashboard() {
         </div>
 
         {/* Tabs */}
-        <div className="mb-6 flex gap-2">
-          {(['bookings', 'analytics'] as AdminTab[]).map((tab) => (
+        <div className="mb-6 flex gap-2 flex-wrap">
+          {([
+            ['bookings',  '📋 Bookings'],
+            ['analytics', '📊 Analytics'],
+            ['blackout',  '🚫 Blackout Dates'],
+          ] as [AdminTab, string][]).map(([tab, label]) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`px-5 py-2 rounded-lg font-bold text-sm transition-all capitalize ${
+              className={`px-5 py-2 rounded-lg font-bold text-sm transition-all ${
                 activeTab === tab
                   ? 'bg-gradient-to-r from-cyan-500 to-magenta-500 text-white shadow-lg shadow-cyan-500/30'
                   : 'bg-slate-800/50 border border-slate-600 text-cyan-300/70 hover:border-slate-500'
               }`}
             >
-              {tab === 'bookings' ? '📋 Bookings' : '📊 Analytics'}
+              {label}
             </button>
           ))}
         </div>
@@ -637,6 +727,99 @@ export default function AdminDashboard() {
           </div>
         )}
       </div>
+
+      {/* ── Blackout Dates Tab ── */}
+      {activeTab === 'blackout' && (
+        <div className="space-y-6">
+          {/* Block form */}
+          <div className="backdrop-blur-xl bg-slate-900/40 border border-pink-400/20 rounded-xl p-6 space-y-4">
+            <h3 className="text-pink-300 font-black text-lg">Block Date(s)</h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className={LABEL_CLS}>From *</label>
+                <input
+                  type="date"
+                  value={blackoutForm.startDate}
+                  onChange={(e) => setBlackoutForm((p) => ({ ...p, startDate: e.target.value, endDate: p.endDate || e.target.value }))}
+                  className={INPUT_CLS}
+                />
+              </div>
+              <div>
+                <label className={LABEL_CLS}>To (leave same for single date)</label>
+                <input
+                  type="date"
+                  value={blackoutForm.endDate}
+                  min={blackoutForm.startDate}
+                  onChange={(e) => setBlackoutForm((p) => ({ ...p, endDate: e.target.value }))}
+                  className={INPUT_CLS}
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className={LABEL_CLS}>Reason</label>
+              <input
+                type="text"
+                placeholder="e.g. Maintenance, Holiday, Private Event…"
+                value={blackoutForm.reason}
+                onChange={(e) => setBlackoutForm((p) => ({ ...p, reason: e.target.value }))}
+                className={INPUT_CLS}
+              />
+            </div>
+
+            {blackoutError && (
+              <p className="text-pink-400 text-sm">{blackoutError}</p>
+            )}
+
+            <button
+              onClick={handleBlockDates}
+              disabled={blackoutSubmitting || !blackoutForm.startDate}
+              className="bg-gradient-to-r from-pink-500 to-red-500 hover:from-pink-400 hover:to-red-400 disabled:opacity-50 text-white font-black px-6 py-2 rounded-lg shadow-lg shadow-pink-500/30 text-sm"
+            >
+              {blackoutSubmitting ? 'Blocking…' : '🚫 Block Date(s)'}
+            </button>
+          </div>
+
+          {/* Active blackout dates list */}
+          <div className="space-y-3">
+            <h3 className="text-cyan-300/70 text-sm uppercase tracking-wider font-bold">
+              Active Blackout Dates ({blackoutDates.length})
+            </h3>
+
+            {blackoutLoading ? (
+              <p className="text-cyan-300/60 text-sm">Loading...</p>
+            ) : blackoutDates.length === 0 ? (
+              <div className="backdrop-blur-xl bg-slate-900/40 border border-cyan-400/20 rounded-xl p-6 text-center">
+                <p className="text-cyan-300/50 text-sm">No blackout dates set.</p>
+              </div>
+            ) : (
+              blackoutDates.map((bd) => (
+                <div
+                  key={bd.id}
+                  className="backdrop-blur-xl bg-slate-900/40 border border-pink-400/20 rounded-xl px-5 py-4 flex items-center justify-between gap-4"
+                >
+                  <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+                    <span className="text-white font-bold">
+                      {new Date(bd.date + 'T12:00').toLocaleDateString('en-IN', {
+                        weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+                      })}
+                    </span>
+                    <span className="text-pink-300">{bd.reason}</span>
+                    <span className="text-slate-400 text-xs self-center">by {bd.createdBy ?? 'admin'}</span>
+                  </div>
+                  <button
+                    onClick={() => handleUnblockDate(bd.date)}
+                    className="shrink-0 bg-slate-800/60 border border-slate-600 hover:border-green-500/60 hover:text-green-400 text-slate-300 text-xs font-bold px-3 py-1.5 rounded-lg transition-all"
+                  >
+                    ✓ Unblock
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── Offline Booking Modal ── */}
       {showModal && (

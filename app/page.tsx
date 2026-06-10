@@ -13,6 +13,7 @@ interface Slot {
 
 interface Availability {
   date: string;
+  blackout?: boolean;
   slots: Slot[];
 }
 
@@ -305,8 +306,10 @@ export default function BookingPage() {
                 <p className="text-magenta-300/80">₹1,180 per hour • Pick consecutive slots</p>
               </div>
               {availability.slots.length === 0 ? (
-                <div className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 p-4 text-cyan-100">
-                  No available slots are open for this date yet. Please choose another day.
+                <div className="rounded-lg border border-pink-400/30 bg-pink-500/10 p-4 text-pink-100">
+                  {availability.blackout
+                    ? '🚫 This date is unavailable. Please choose another date.'
+                    : 'No available slots for this date. Please choose another day.'}
                 </div>
               ) : (
                 <div className="grid grid-cols-2 gap-3">
