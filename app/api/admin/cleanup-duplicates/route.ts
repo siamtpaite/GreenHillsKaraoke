@@ -32,6 +32,7 @@ export async function POST(req: NextRequest) {
       groups.get(key)!.push({ id: docSnap.id, data });
     }
 
+    let duplicatesFound = 0;
     let duplicatesRemoved = 0;
     let batch = adminDb.batch();
     let opsInBatch = 0;
@@ -63,6 +64,7 @@ export async function POST(req: NextRequest) {
       const [keeper, ...duplicates] = bookings;
       const keeperHours = new Set<string>(keeper.data.hourList);
 
+      duplicatesFound += duplicates.length;
       console.log(`[cleanup-duplicates] Group: ${key}`);
       console.log(`  Keeping  ${keeper.id} (${keeper.data.status}, created ${keeper.data.createdAt?.toDate?.()})`);
 
@@ -96,9 +98,9 @@ export async function POST(req: NextRequest) {
 
     await flushBatch();
 
-    console.log(`[cleanup-duplicates] Done — ${duplicatesRemoved} duplicates removed`);
+    console.log(`[cleanup-duplicates] Done — found ${duplicatesFound}, removed ${duplicatesRemoved}`);
 
-    return NextResponse.json({ success: true, duplicatesRemoved });
+    return NextResponse.json({ success: true, duplicatesFound, duplicatesRemoved });
   } catch (error) {
     console.error('[cleanup-duplicates] Error:', error);
     return NextResponse.json({ success: false, error: 'Internal server error' }, { status: 500 });
