@@ -5,6 +5,7 @@ interface WhatsAppMessage {
   hours: number;
   totalAmount: number;
   amountDue?: number;
+  startHour?: number;
   eventType:
     | 'booking_confirmed'
     | 'customer_booking_confirmed'
@@ -13,7 +14,8 @@ interface WhatsAppMessage {
     | 'cancelled'
     | 'customer_checked_in'
     | 'customer_checked_out'
-    | 'customer_cancelled';
+    | 'customer_cancelled'
+    | 'no_show';
 }
 
 export function formatCustomerJid(phone: string): string {
@@ -65,6 +67,12 @@ export async function sendWhatsAppNotification(message: WhatsAppMessage, recipie
   }
 }
 
+function fmtHourWA(h: number): string {
+  if (h < 12) return `${h}:00 AM`;
+  if (h === 12) return '12:00 PM';
+  return `${h - 12}:00 PM`;
+}
+
 function formatWhatsAppMessage(message: WhatsAppMessage): string {
   const events: Record<WhatsAppMessage['eventType'], string> = {
     booking_confirmed: `✅ *NEW BOOKING CONFIRMED*\n\n👤 Guest: ${message.customerName}\n📅 Date: ${message.date}\n⏱️ Duration: ${message.hours} hour(s)\n💰 Amount: ₹${message.totalAmount}\n🔖 Booking ID: ${message.bookingId}`,
@@ -75,6 +83,7 @@ function formatWhatsAppMessage(message: WhatsAppMessage): string {
     customer_checked_in: `✅ *CHECK-IN CONFIRMED*\n\nWelcome to Green Hills Karaoke!\n📅 ${message.date}\n⏱️ ${message.hours} hour(s)\n🔖 Booking ID: ${message.bookingId}\n\nEnjoy your session! 🎤`,
     customer_checked_out: `✅ *SESSION COMPLETED*\n\nThank you for visiting Green Hills Karaoke!\n🔖 Booking ID: ${message.bookingId}\n\nSee you again soon! 🎤`,
     customer_cancelled: `❌ *BOOKING CANCELLED*\n\nYour booking has been cancelled.\n📅 ${message.date}\n💵 Note: ₹500 deposit is non-refundable.\n🔖 Booking ID: ${message.bookingId}`,
+    no_show: `⏰ *NO-SHOW ALERT*\n\n👤 ${message.customerName} didn't show for ${message.date}${message.startHour !== undefined ? ` at ${fmtHourWA(message.startHour)}` : ''}\n🔖 Booking ID: ${message.bookingId}\n💵 ₹500 deposit forfeited`,
   };
 
   return events[message.eventType];
