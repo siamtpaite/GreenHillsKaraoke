@@ -1,10 +1,19 @@
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
 
+function getCredentials() {
+  const keyId =
+    process.env.TEST_NEXT_PUBLIC_RAZORPAY_KEY_ID ||
+    process.env.RAZORPAY_KEY_ID ||
+    process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
+  const keySecret =
+    process.env.TEST_RAZORPAY_KEY_SECRET ||
+    process.env.RAZORPAY_KEY_SECRET;
+  return { keyId, keySecret };
+}
+
 function getRazorpayClient() {
-  // NEXT_PUBLIC_ prefix is for client bundles; server-side uses the unprefixed var.
-  const keyId = process.env.RAZORPAY_KEY_ID || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
-  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+  const { keyId, keySecret } = getCredentials();
 
   if (!keyId || !keySecret) {
     throw new Error('Razorpay credentials are not configured');
@@ -55,9 +64,11 @@ export function verifyPaymentSignature(
   paymentId: string,
   signature: string
 ): boolean {
+  const { keySecret } = getCredentials();
+  if (!keySecret) throw new Error('Razorpay credentials are not configured');
   const message = `${orderId}|${paymentId}`;
   const expectedSignature = crypto
-    .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET!)
+    .createHmac('sha256', keySecret)
     .update(message)
     .digest('hex');
 
