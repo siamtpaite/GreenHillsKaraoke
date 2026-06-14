@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { lockAndConfirmBooking } from '@/lib/booking/service';
 import { verifyPaymentSignature, refundPayment } from '@/lib/payment/razorpay';
-import { sendWhatsAppNotification, formatCustomerJid } from '@/lib/whatsapp/baileys-send';
+import { sendCustomerConfirmation, sendAdminBookingAlert } from '@/lib/whatsapp/twilio-send';
 import { ApiResponse } from '@/lib/types';
 
 const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '1180');
@@ -84,15 +84,14 @@ export async function POST(request: NextRequest) {
     // Fire WhatsApp notifications — don't await, booking is already committed
     const totalAmount = HOURLY_RATE * hours;
     const amountDue = totalAmount - DEPOSIT_AMOUNT;
-    const waBase = { bookingId, customerName, date, hours, totalAmount, amountDue, startHour };
 
-    sendWhatsAppNotification(
-      { ...waBase, eventType: 'customer_booking_confirmed' },
-      formatCustomerJid(customerPhone)
+    sendCustomerConfirmation(
+      customerPhone,
+      { date, hours, amountDue, bookingId }
     ).catch((e) => console.error('[confirm] Customer WA failed:', e));
 
-    sendWhatsAppNotification(
-      { ...waBase, eventType: 'booking_confirmed' }
+    sendAdminBookingAlert(
+      { guestName: customerName, date, hours, amountDue, bookingId }
     ).catch((e) => console.error('[confirm] Admin WA failed:', e));
 
     return NextResponse.json(
