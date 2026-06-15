@@ -1,587 +1,489 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo, useRef, useCallback } from 'react';
 import Image from 'next/image';
 
-type BookingStep = 'date' | 'slots' | 'form' | 'payment' | 'confirmation';
+type BookingStep = 'date' | 'timeline' | 'form' | 'payment' | 'confirmation';
+type PaymentType = 'full' | 'deposit';
 
-interface Slot {
-  hour: number;
-  status: string;
-  timeSlot: string;
+interface BookedRange { start: number; end: number; bookingId: string; }
+
+// Customer timeline: 1 PM – 10 PM
+const TL_START = 780;   // 13 × 60
+const TL_END   = 1320;  // 22 × 60
+const TL_SPAN  = TL_END - TL_START;
+
+const DURATION_OPTS = [
+  { label: '30 min', value: 30 },
+  { label: '1 hr',   value: 60 },
+  { label: '1.5 hr', value: 90 },
+  { label: '2 hr',   value: 120 },
+  { label: '2.5 hr', value: 150 },
+  { label: '3 hr',   value: 180 },
+  { label: '4 hr',   value: 240 },
+  { label: '5 hr',   value: 300 },
+  { label: '6 hr',   value: 360 },
+];
+
+const RATE = 50;
+const DEPOSIT = 50;
+
+function minutesToTime(min: number): string {
+  if (min >= 1440) return '12:00 AM';
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  const period = h >= 12 ? 'PM' : 'AM';
+  const dh = h > 12 ? h - 12 : h === 0 ? 12 : h;
+  return `${dh}:${m.toString().padStart(2, '0')} ${period}`;
 }
 
-interface Availability {
-  date: string;
-  blackout?: boolean;
-  slots: Slot[];
+function fmtDuration(min: number): string {
+  const h = Math.floor(min / 60), m = min % 60;
+  if (m === 0) return `${h} hr${h !== 1 ? 's' : ''}`;
+  if (h === 0) return `${m} min`;
+  return `${h}h ${m}min`;
 }
+
+const pctL = (min: number) => `${((min - TL_START) / TL_SPAN * 100).toFixed(3)}%`;
+const pctW = (dur: number) => `${(dur / TL_SPAN * 100).toFixed(3)}%`;
+const overlaps = (aS: number, aE: number, bS: number, bE: number) => aS < bE && aE > bS;
 
 export default function BookingPage() {
   const [step, setStep] = useState<BookingStep>('date');
   const [selectedDate, setSelectedDate] = useState('');
-  const [availability, setAvailability] = useState<Availability | null>(null);
-  const [selectedSlots, setSelectedSlots] = useState<number[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  const [formData, setFormData] = useState({
-    customerName: '',
-    customerEmail: '',
-    customerPhone: '',
-    vipMember: false,
-  });
-
-  const [bookingData, setBookingData] = useState({
-    bookingId: '',
-    razorpayOrderId: '',
-    totalAmount: 0,
-    depositAmount: 500,
-  });
-
+  const [bookedRanges, setBookedRanges] = useState<BookedRange[]>([]);
+  const [isBlackout, setIsBlackout] = useState(false);
+  const [dateLoading, setDateLoading] = useState(false);
+  const [dateError, setDateError] = useState('');
+  const [selectedStart, setSelectedStart] = useState<number | null>(null);
+  const [selectedDuration, setSelectedDuration] = useState(60);
+  const [formData, setFormData] = useState({ customerName: '', customerEmail: '', customerPhone: '', vipMember: false });
+  const [bookingData, setBookingData] = useState({ bookingId: '', totalAmount: 0, paidAmount: 0, balanceDue: 0, paymentType: '' as PaymentType | '' });
+  const [paymentChoiceLoading, setPaymentChoiceLoading] = useState<'' | 'full' | 'deposit'>('');
   const [cancelLoading, setCancelLoading] = useState(false);
   const [bookingCancelled, setBookingCancelled] = useState(false);
+  const [confirmError, setConfirmError] = useState('');
+  const timelineRef = useRef<HTMLDivElement>(null);
+
+  const selectionValid = useMemo(() => {
+    if (selectedStart === null) return false;
+    const end = selectedStart + selectedDuration;
+    if (selectedStart < TL_START || end > TL_END) return false;
+    return !bookedRanges.some(r => overlaps(selectedStart, end, r.start, r.end));
+  }, [selectedStart, selectedDuration, bookedRanges]);
+
+  const totalAmount = Math.ceil(selectedDuration / 60) * RATE;
 
   const fetchAvailability = async (date: string) => {
-    setLoading(true);
-    setError('');
+    setDateLoading(true); setDateError('');
     try {
       const res = await fetch(`/api/availability?date=${date}`);
       const data = await res.json();
       if (data.success) {
-        setAvailability(data.data);
-        setStep('slots');
-      } else {
-        setError(data.error || 'Failed to fetch availability');
-      }
-    } catch (err) {
-      setError('Error fetching availability');
-    } finally {
-      setLoading(false);
-    }
+        setIsBlackout(!!data.data.blackout);
+        setBookedRanges(data.data.bookedRanges ?? []);
+        setSelectedStart(null);
+        setStep('timeline');
+      } else { setDateError(data.error || 'Failed to fetch availability'); }
+    } catch { setDateError('Error fetching availability'); }
+    finally { setDateLoading(false); }
   };
 
-  const toggleSlot = (hour: number) => {
-    const newSelected = selectedSlots.includes(hour)
-      ? selectedSlots.filter((h) => h !== hour)
-      : [...selectedSlots, hour].sort((a, b) => a - b);
-    setSelectedSlots(newSelected);
-  };
+  const handleTimelineClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!timelineRef.current) return;
+    const rect = timelineRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(e.clientX - rect.left, rect.width));
+    const snapped = Math.round((TL_START + (x / rect.width) * TL_SPAN) / 5) * 5;
+    setSelectedStart(Math.max(TL_START, Math.min(TL_END - selectedDuration, snapped)));
+  }, [selectedDuration]);
 
-  const isConsecutive = (slots: number[]): boolean => {
-    if (slots.length === 0) return false;
-    for (let i = 1; i < slots.length; i++) {
-      if (slots[i] !== slots[i - 1] + 1) return false;
-    }
-    return true;
-  };
-
-  const handleBooking = async () => {
-    if (!isConsecutive(selectedSlots)) {
-      setError('Please select consecutive hours');
-      return;
-    }
-    if (!formData.customerName || !formData.customerEmail || !formData.customerPhone) {
-      setError('Please fill in all required fields');
-      return;
-    }
-    setLoading(true);
-    setError('');
+  const handlePaymentChoice = async (type: PaymentType) => {
+    const razorpayKey = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
+    if (!razorpayKey || selectedStart === null) return;
+    setPaymentChoiceLoading(type); setConfirmError('');
     try {
       const res = await fetch('/api/bookings/initiate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          date: selectedDate,
-          startHour: selectedSlots[0],
-          hours: selectedSlots.length,
-          customerName: formData.customerName,
-          customerEmail: formData.customerEmail,
-          customerPhone: formData.customerPhone,
-        }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: selectedDate, startTime: selectedStart, duration: selectedDuration,
+          customerName: formData.customerName, customerEmail: formData.customerEmail,
+          customerPhone: formData.customerPhone, paymentType: type }),
       });
       const data = await res.json();
-      if (data.success) {
-        const totalAmount = 1180 * selectedSlots.length;
-        setBookingData({
-          bookingId: data.data.bookingId,
-          razorpayOrderId: data.data.razorpayOrder?.id || '',
-          totalAmount,
-          depositAmount: Math.round((data.data.razorpayOrder?.amount ?? 50000) / 100),
-        });
-        setStep('payment');
-      } else {
-        setError(data.error || 'Booking failed');
-      }
-    } catch (err) {
-      setError('Error initiating booking');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const initializePayment = async () => {
-    const razorpayKey = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
-    if (!razorpayKey) {
-      setError('Payment gateway not configured');
-      return;
-    }
-    const options = {
-      key: razorpayKey,
-      order_id: bookingData.razorpayOrderId,
-      amount: bookingData.depositAmount * 100,
-      currency: 'INR',
-      name: 'Green Hills Karaoke',
-      description: `Booking for ${selectedDate} - ${selectedSlots.length} hour(s)`,
-      handler: async (response: any) => {
-        try {
-          const res = await fetch('/api/bookings/confirm', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              razorpay_payment_id: response.razorpay_payment_id,
-              razorpay_order_id: response.razorpay_order_id,
-              razorpay_signature: response.razorpay_signature,
-              bookingId: bookingData.bookingId,
-              date: selectedDate,
-              startHour: selectedSlots[0],
-              hours: selectedSlots.length,
-              customerName: formData.customerName,
-              customerEmail: formData.customerEmail,
-              customerPhone: formData.customerPhone,
-            }),
-          });
-          const data = await res.json();
-          if (data.success) {
-            setStep('confirmation');
-          } else {
-            setError(data.error || 'Payment verification failed');
-          }
-        } catch (err) {
-          setError('Payment verification error');
-        }
-      },
-      prefill: {
-        name: formData.customerName,
-        email: formData.customerEmail,
-        contact: formData.customerPhone,
-      },
-      theme: { color: '#00D9FF' },
-    };
-    const openRazorpay = () => {
-      const rzp = new (window as any).Razorpay(options);
-      rzp.open();
-    };
-
-    if ((window as any).Razorpay) {
-      openRazorpay();
-    } else {
-      const script = document.createElement('script');
-      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-      script.async = true;
-      script.onload = openRazorpay;
-      document.body.appendChild(script);
-    }
+      if (!data.success) { setConfirmError(data.error || 'Failed to initiate payment'); setPaymentChoiceLoading(''); return; }
+      const { bookingId, totalAmount: total, razorpayOrder } = data.data;
+      const paid = Math.round(razorpayOrder.amount / 100);
+      setBookingData({ bookingId, totalAmount: total, paidAmount: paid, balanceDue: total - paid, paymentType: type });
+      const options = {
+        key: razorpayKey, order_id: razorpayOrder.id, amount: razorpayOrder.amount,
+        currency: razorpayOrder.currency || 'INR', name: 'Green Hills Karaoke',
+        description: `${selectedDate} · ${minutesToTime(selectedStart)} – ${minutesToTime(selectedStart + selectedDuration)}`,
+        handler: async (response: any) => {
+          try {
+            const cr = await fetch('/api/bookings/confirm', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_order_id: response.razorpay_order_id, razorpay_signature: response.razorpay_signature,
+                bookingId, date: selectedDate, startTime: selectedStart, duration: selectedDuration,
+                customerName: formData.customerName, customerEmail: formData.customerEmail,
+                customerPhone: formData.customerPhone, paymentType: type }),
+            });
+            const cd = await cr.json();
+            if (cd.success) setStep('confirmation');
+            else setConfirmError(cd.error || 'Payment verification failed');
+          } catch { setConfirmError('Payment verification error'); }
+        },
+        prefill: { name: formData.customerName, email: formData.customerEmail, contact: formData.customerPhone },
+        theme: { color: '#00D9FF' },
+      };
+      const openRzp = () => { const rzp = new (window as any).Razorpay(options); rzp.open(); };
+      if ((window as any).Razorpay) { openRzp(); }
+      else { const s = document.createElement('script'); s.src = 'https://checkout.razorpay.com/v1/checkout.js'; s.async = true; s.onload = openRzp; document.body.appendChild(s); }
+    } catch { setConfirmError('Error initiating payment'); }
+    finally { setPaymentChoiceLoading(''); }
   };
 
   const handleCancelBooking = async () => {
-    const confirmed = window.confirm(
-      '⚠️ WARNING: Cancellation will forfeit your ₹500 non-refundable deposit. Continue?'
-    );
-    if (!confirmed) return;
+    if (!confirm('⚠️ Cancellation will forfeit your ₹50 non-refundable deposit. Continue?')) return;
     setCancelLoading(true);
-    setError('');
     try {
       const res = await fetch(`/api/bookings/${bookingData.bookingId}/cancel`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ customerPhone: formData.customerPhone }),
       });
       const data = await res.json();
-      if (data.success) {
-        setBookingCancelled(true);
-      } else {
-        setError(data.error || 'Cancellation failed');
-      }
-    } catch {
-      setError('Error cancelling booking');
-    } finally {
-      setCancelLoading(false);
-    }
+      if (data.success) setBookingCancelled(true); else setConfirmError(data.error || 'Cancellation failed');
+    } catch { setConfirmError('Error cancelling booking'); }
+    finally { setCancelLoading(false); }
   };
 
-  const getMinDate = () => {
-    const today = new Date();
-    return today.toISOString().split('T')[0];
+  const resetAll = () => {
+    setStep('date'); setSelectedDate(''); setBookedRanges([]); setIsBlackout(false);
+    setSelectedStart(null); setSelectedDuration(60); setBookingCancelled(false);
+    setFormData({ customerName: '', customerEmail: '', customerPhone: '', vipMember: false });
+    setBookingData({ bookingId: '', totalAmount: 0, paidAmount: 0, balanceDue: 0, paymentType: '' });
+    setConfirmError('');
   };
+
+  const hourLabels = Array.from({ length: 10 }, (_, i) => TL_START + i * 60);
+  const steps: BookingStep[] = ['date','timeline','form','payment','confirmation'];
 
   return (
-    <div className="min-h-screen bg-slate-950 relative overflow-hidden py-12 px-4">
-      {/* Animated vibrant neon background */}
+    <div className="min-h-screen bg-slate-950 py-12 px-4 relative overflow-hidden">
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        {/* Cyan pulse */}
-        <div className="absolute top-20 left-10 w-96 h-96 bg-cyan-500/20 rounded-full blur-3xl animate-neon-vibe"></div>
-        {/* Magenta pulse */}
-        <div className="absolute bottom-20 right-10 w-96 h-96 bg-magenta-500/20 rounded-full blur-3xl animate-neon-vibe" style={{ animationDelay: '0.5s' }}></div>
-        {/* Pink pulse */}
-        <div className="absolute top-1/2 left-1/2 w-96 h-96 bg-pink-500/15 rounded-full blur-3xl animate-neon-vibe" style={{ animationDelay: '1s' }}></div>
-        {/* Green pulse (matching logo) */}
-        <div className="absolute bottom-1/3 left-1/4 w-80 h-80 bg-green-500/15 rounded-full blur-3xl animate-neon-vibe" style={{ animationDelay: '1.5s' }}></div>
-        {/* Extra cyan glow */}
-        <div className="absolute top-1/3 right-1/4 w-72 h-72 bg-cyan-400/10 rounded-full blur-3xl animate-neon-vibe" style={{ animationDelay: '2s' }}></div>
+        <div className="absolute top-20 left-10 w-96 h-96 bg-cyan-500/20 rounded-full blur-3xl animate-pulse" />
+        <div className="absolute bottom-20 right-10 w-96 h-96 bg-pink-500/20 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '0.8s' }} />
+        <div className="absolute top-1/2 left-1/3 w-80 h-80 bg-violet-500/15 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1.6s' }} />
       </div>
 
       <div className="max-w-2xl mx-auto relative z-10">
-        {/* Header with Logo */}
-        <div className="mb-12 text-center animate-in fade-in slide-in-from-top-8 duration-1000">
-          <div className="mb-6 flex justify-center">
-            <Image 
-              src="/logo.png" 
-              alt="Green Hills Karaoke" 
-              width={120} 
-              height={120}
-              className="opacity-90 hover:opacity-100 transition-opacity drop-shadow-lg"
-              style={{ filter: 'drop-shadow(0 0 20px rgba(34,197,94,0.4))' }}
-            />
+        {/* Header */}
+        <div className="mb-10 text-center">
+          <div className="mb-5 flex justify-center">
+            <Image src="/logo.png" alt="Green Hills Karaoke" width={110} height={110} className="opacity-90 drop-shadow-lg" style={{ filter: 'drop-shadow(0 0 20px rgba(34,197,94,0.4))' }} />
           </div>
-          <div className="mb-4">
-            <h1 className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-pink-300 to-magenta-300 drop-shadow-lg animate-text-glow" 
-                style={{ textShadow: '0 0 40px rgba(0,217,255,0.6), 0 0 80px rgba(236,72,153,0.4), 0 0 120px rgba(139,92,246,0.2)' }}>
-              GREEN HILLS
-            </h1>
-            <p className="text-2xl font-bold text-green-300 mt-1 animate-text-glow" style={{ textShadow: '0 0 30px rgba(34,197,94,0.8)' }}>
-              KARAOKE
-            </p>
-          </div>
-          <p className="text-lg text-cyan-300/90 animate-pulse">Reserve Your Night • Live Your Song</p>
+          <h1 className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 via-pink-300 to-violet-300" style={{ textShadow: '0 0 40px rgba(0,217,255,0.5)' }}>GREEN HILLS</h1>
+          <p className="text-2xl font-bold text-green-300 mt-1" style={{ textShadow: '0 0 25px rgba(34,197,94,0.8)' }}>KARAOKE</p>
+          <p className="text-cyan-300/70 mt-2 animate-pulse text-sm">Reserve Your Night • Live Your Song</p>
         </div>
 
-        {/* Step indicator */}
-        <div className="mb-12 flex justify-center gap-3">
-          {['date', 'slots', 'form', 'payment', 'confirmation'].map((s, i) => (
-            <div
-              key={s}
-              className={`w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
-                step === s
-                  ? 'bg-gradient-to-r from-cyan-400 to-magenta-400 text-slate-900 shadow-lg shadow-cyan-400/70 scale-125 animate-pulse'
-                  : ['date', 'slots', 'form'].includes(s) && ['slots', 'form', 'payment', 'confirmation'].includes(step)
-                  ? 'bg-gradient-to-r from-cyan-500 to-pink-500 text-white shadow-lg shadow-pink-400/50'
-                  : 'bg-slate-800 border border-slate-700 text-slate-400'
-              }`}
-            >
-              {i + 1}
-            </div>
+        {/* Step dots */}
+        <div className="mb-8 flex justify-center gap-3">
+          {steps.map((s, i) => (
+            <div key={s} className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
+              step === s ? 'bg-gradient-to-r from-cyan-400 to-pink-400 text-slate-900 scale-125 shadow-lg shadow-cyan-400/60'
+              : i < steps.indexOf(step) ? 'bg-gradient-to-r from-cyan-500/60 to-pink-500/60 text-white'
+              : 'bg-slate-800 border border-slate-700 text-slate-500'}`}>{i + 1}</div>
           ))}
         </div>
 
-        {/* Main Card */}
-        <div className="backdrop-blur-xl bg-slate-900/50 border border-cyan-400/30 rounded-2xl p-8 shadow-2xl shadow-cyan-400/20 animate-in fade-in slide-in-from-bottom-8 duration-700 relative overflow-hidden">
-          {/* Animated corner accent */}
-          <div className="absolute top-0 right-0 w-40 h-40 bg-gradient-to-bl from-cyan-500/20 to-transparent rounded-bl-full blur-2xl animate-neon-vibe"></div>
-          
+        {/* Main card */}
+        <div className="backdrop-blur-xl bg-slate-900/50 border border-cyan-400/30 rounded-2xl p-7 shadow-2xl shadow-cyan-400/15 relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-40 h-40 bg-gradient-to-bl from-cyan-500/15 to-transparent rounded-bl-full blur-2xl pointer-events-none" />
+
+          {/* ── DATE ── */}
           {step === 'date' && (
-            <div className="space-y-6 relative z-10">
+            <div className="space-y-5 relative z-10">
               <div>
-                <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-pink-300 mb-2 animate-text-glow" 
-                    style={{ textShadow: '0 0 20px rgba(0,217,255,0.4)' }}>
-                  Pick Your Date
-                </h2>
-                <p className="text-cyan-300/80">Step into the spotlight</p>
+                <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-pink-300">Pick Your Date</h2>
+                <p className="text-cyan-300/50 text-sm mt-1">Step into the spotlight</p>
               </div>
-              <input
-                type="date"
-                min={getMinDate()}
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                className="w-full px-4 py-3 bg-slate-800/60 border-2 border-cyan-400/40 rounded-lg focus:outline-none focus:border-cyan-300 focus:ring-2 focus:ring-cyan-400/30 text-white placeholder-cyan-300/40 transition-all shadow-lg shadow-cyan-400/10"
-              />
-              {error && <p className="text-pink-400 font-semibold">{error}</p>}
-              <button
-                onClick={() => {
-                  if (!selectedDate) {
-                    setError('Please select a date');
-                    return;
-                  }
-                  fetchAvailability(selectedDate);
-                }}
-                disabled={loading}
-                className="w-full bg-gradient-to-r from-cyan-400 to-magenta-400 hover:from-cyan-300 hover:to-magenta-300 disabled:opacity-50 text-slate-900 font-black py-3 rounded-lg transition-all shadow-lg shadow-cyan-400/60 hover:shadow-cyan-400/80 disabled:shadow-none"
-              >
-                {loading ? '🎤 Checking...' : '🎤 Check Availability'}
+              <input type="date" min={new Date().toISOString().split('T')[0]} value={selectedDate}
+                onChange={e => setSelectedDate(e.target.value)}
+                className="w-full px-4 py-3 bg-slate-800/60 border-2 border-cyan-400/40 rounded-lg text-white focus:outline-none focus:border-cyan-300 transition-all" />
+              {dateError && <p className="text-pink-400 text-sm">{dateError}</p>}
+              <button onClick={() => { if (!selectedDate) { setDateError('Please select a date'); return; } fetchAvailability(selectedDate); }}
+                disabled={dateLoading}
+                className="w-full bg-gradient-to-r from-cyan-400 to-pink-500 hover:from-cyan-300 hover:to-pink-400 disabled:opacity-50 text-slate-900 font-black py-3 rounded-lg shadow-lg shadow-cyan-400/40 transition-all">
+                {dateLoading ? '🎤 Checking…' : '🎤 Check Availability'}
               </button>
             </div>
           )}
 
-          {step === 'slots' && availability && (
-            <div className="space-y-6 relative z-10">
+          {/* ── TIMELINE ── */}
+          {step === 'timeline' && (
+            <div className="space-y-5 relative z-10">
               <div>
-                <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-magenta-300 to-pink-300 mb-2 animate-text-glow" 
-                    style={{ textShadow: '0 0 20px rgba(236,72,153,0.4)' }}>
-                  Select Hours
-                </h2>
-                <p className="text-magenta-300/80">₹1,180 per hour • Pick consecutive slots</p>
+                <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-300 to-violet-300">Choose Your Slot</h2>
+                <p className="text-pink-300/50 text-sm mt-1">{selectedDate} · ₹{RATE.toLocaleString()}/hr</p>
               </div>
-              {availability.slots.length === 0 ? (
-                <div className="rounded-lg border border-pink-400/30 bg-pink-500/10 p-4 text-pink-100">
-                  {availability.blackout
-                    ? '🚫 This date is unavailable. Please choose another date.'
-                    : 'No available slots for this date. Please choose another day.'}
+
+              {isBlackout ? (
+                <div className="rounded-lg border border-pink-400/30 bg-pink-500/10 p-4 text-pink-200 text-sm">
+                  🚫 This date is unavailable. Please choose another date.
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-3">
-                  {availability.slots.map((slot) => (
-                  <button
-                    key={slot.hour}
-                    onClick={() => {
-                      if (slot.status !== 'available') {
-                        alert('This slot is already taken. Please choose another time.');
-                        return;
-                      }
-                      toggleSlot(slot.hour);
-                    }}
-                    className={`p-4 rounded-lg font-bold transition-all text-sm ${
-                      selectedSlots.includes(slot.hour)
-                        ? 'bg-gradient-to-r from-cyan-400 to-magenta-400 text-slate-900 shadow-lg shadow-magenta-400/60 scale-105'
-                        : slot.status === 'available'
-                        ? 'bg-slate-800/60 border border-magenta-400/40 text-magenta-300 hover:border-magenta-300/80 hover:shadow-lg hover:shadow-magenta-400/30 transition-all'
-                        : 'bg-slate-800/30 border border-slate-700 text-slate-500 cursor-not-allowed opacity-50'
-                    }`}
-                  >
-                    {slot.timeSlot}
-                  </button>
-                  ))}
-                </div>
+                <>
+                  {/* Duration */}
+                  <div>
+                    <p className="text-slate-400 text-xs mb-2 font-semibold uppercase tracking-wider">How long?</p>
+                    <div className="flex flex-wrap gap-2">
+                      {DURATION_OPTS.map(opt => (
+                        <button key={opt.value} onClick={() => { setSelectedDuration(opt.value); setSelectedStart(null); }}
+                          className={`px-3 py-2 rounded-lg text-sm font-bold transition-all ${
+                            selectedDuration === opt.value
+                              ? 'bg-gradient-to-r from-cyan-400 to-cyan-600 text-slate-900 shadow-lg shadow-cyan-400/40 scale-105'
+                              : 'bg-slate-800/60 border border-cyan-400/30 text-cyan-300 hover:border-cyan-300/60'}`}>
+                          {opt.label}
+                          <span className="block text-[10px] opacity-60">₹{(Math.ceil(opt.value / 60) * RATE).toLocaleString()}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Timeline bar */}
+                  <div>
+                    <p className="text-slate-400 text-xs mb-1 font-semibold uppercase tracking-wider">Tap to select start time</p>
+
+                    {/* Hour labels */}
+                    <div className="relative h-5 mb-1">
+                      {hourLabels.map(min => (
+                        <span key={min} className="absolute text-[10px] text-slate-500 -translate-x-1/2 whitespace-nowrap" style={{ left: pctL(min) }}>
+                          {minutesToTime(min)}
+                        </span>
+                      ))}
+                      <span className="absolute text-[10px] text-slate-500 -translate-x-full whitespace-nowrap" style={{ left: '100%' }}>
+                        {minutesToTime(TL_END)}
+                      </span>
+                    </div>
+
+                    {/* Clickable track */}
+                    <div ref={timelineRef} onClick={handleTimelineClick}
+                      className="relative h-16 bg-slate-800/60 border border-slate-700/50 rounded-lg cursor-crosshair overflow-hidden select-none">
+
+                      {hourLabels.map(min => (
+                        <div key={min} className="absolute top-0 h-full w-px bg-slate-600/30" style={{ left: pctL(min) }} />
+                      ))}
+
+                      {!selectedStart && (
+                        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                          <span className="text-slate-600 text-xs">Tap anywhere to set start time</span>
+                        </div>
+                      )}
+
+                      {/* Booked ranges */}
+                      {bookedRanges.map((r, i) => {
+                        const vs = Math.max(r.start, TL_START), ve = Math.min(r.end, TL_END);
+                        if (ve <= vs) return null;
+                        return (
+                          <div key={i} className="absolute top-0 h-full bg-red-500/50 border-l border-r border-red-400/50 flex items-center justify-center"
+                            style={{ left: pctL(vs), width: pctW(ve - vs) }}>
+                            <span className="text-red-200 text-[9px] font-bold px-1 truncate">BOOKED</span>
+                          </div>
+                        );
+                      })}
+
+                      {/* Selected range */}
+                      {selectedStart !== null && (
+                        <div className={`absolute top-0 h-full border-l-2 border-r-2 transition-colors ${selectionValid ? 'bg-cyan-500/40 border-cyan-400' : 'bg-red-500/30 border-red-400'}`}
+                          style={{ left: pctL(selectedStart), width: pctW(selectedDuration) }}>
+                          <div className="h-full flex flex-col items-center justify-center px-1">
+                            <span className={`text-[10px] font-black truncate ${selectionValid ? 'text-cyan-100' : 'text-red-200'}`}>{minutesToTime(selectedStart)}</span>
+                            <span className={`text-[9px] truncate ${selectionValid ? 'text-cyan-300/60' : 'text-red-300/60'}`}>{fmtDuration(selectedDuration)}</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex gap-4 mt-2 text-[10px] text-slate-500">
+                      <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-red-500/50 border border-red-400/50 inline-block" /> Booked</span>
+                      <span className="flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-cyan-500/40 border border-cyan-400 inline-block" /> Your pick</span>
+                    </div>
+                  </div>
+
+                  {/* Selection summary */}
+                  {selectedStart !== null && (
+                    <div className={`p-4 rounded-lg border ${selectionValid ? 'bg-cyan-500/10 border-cyan-400/30' : 'bg-red-500/10 border-red-400/40'}`}>
+                      {selectionValid ? (
+                        <>
+                          <p className="text-white font-black text-lg">{minutesToTime(selectedStart)} – {minutesToTime(selectedStart + selectedDuration)}</p>
+                          <p className="text-cyan-300/60 text-sm">{fmtDuration(selectedDuration)} · ₹{totalAmount.toLocaleString()}</p>
+                        </>
+                      ) : (
+                        <p className="text-red-300 font-bold text-sm">⚠️ This time overlaps a booked session — tap a different spot.</p>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
-              {selectedSlots.length > 0 && (
-                <div className="bg-gradient-to-r from-cyan-500/15 to-magenta-500/15 border border-magenta-400/30 p-4 rounded-lg shadow-lg shadow-magenta-400/10">
-                  <p className="text-magenta-300 font-bold">
-                    {selectedSlots.length} hour(s) • ₹{1180 * selectedSlots.length}
-                  </p>
-                </div>
-              )}
-              {error && <p className="text-pink-400 font-semibold">{error}</p>}
+
               <div className="flex gap-3">
-                <button
-                  onClick={() => {
-                    setStep('date');
-                    setSelectedSlots([]);
-                  }}
-                  className="flex-1 bg-slate-800/50 border border-slate-600 hover:border-slate-500 text-cyan-300 font-bold py-3 rounded-lg transition-all"
-                >
-                  Back
-                </button>
-                <button
-                  onClick={() => setStep('form')}
-                  disabled={selectedSlots.length === 0 || !isConsecutive(selectedSlots)}
-                  className="flex-1 bg-gradient-to-r from-magenta-500 to-pink-500 hover:from-magenta-400 hover:to-pink-400 disabled:opacity-50 text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-magenta-400/60"
-                >
+                <button onClick={() => setStep('date')} className="flex-1 bg-slate-800/50 border border-slate-600 text-cyan-300 font-bold py-3 rounded-lg hover:border-slate-500 transition-all">Back</button>
+                <button onClick={() => { if (selectionValid) setStep('form'); }} disabled={!selectionValid}
+                  className="flex-1 bg-gradient-to-r from-pink-500 to-violet-500 hover:from-pink-400 hover:to-violet-400 disabled:opacity-40 text-white font-bold py-3 rounded-lg shadow-lg shadow-pink-400/40 transition-all">
                   Continue →
                 </button>
               </div>
             </div>
           )}
 
+          {/* ── FORM ── */}
           {step === 'form' && (
-            <div className="space-y-6 relative z-10">
-              <div className="bg-gradient-to-r from-yellow-500/20 via-green-500/20 to-cyan-500/20 border-2 border-yellow-400/50 rounded-xl p-5 relative overflow-hidden shadow-lg shadow-yellow-400/20">
-                <div className="absolute inset-0 bg-gradient-to-r from-yellow-500/10 to-green-500/10 animate-neon-vibe"></div>
-                <div className="relative z-10">
-                  <div className="flex items-start gap-3 mb-3">
-                    <span className="text-2xl">👑</span>
-                    <div>
-                      <h3 className="text-yellow-300 font-black text-lg">UNLOCK VIP PERKS</h3>
-                      <p className="text-green-300/90 text-sm">Just ₹200 • Lifetime Access</p>
-                    </div>
-                  </div>
-                  <div className="space-y-2 text-sm mb-4">
-                    <div className="flex gap-2">
-                      <span className="text-cyan-300">✨</span>
-                      <span className="text-cyan-200"><strong>Triple Threat:</strong> Book 2 weekday hours, get 3rd FREE</span>
-                    </div>
-                    <div className="flex gap-2">
-                      <span className="text-yellow-300">⭐</span>
-                      <span className="text-yellow-200"><strong>Loyalty Reward:</strong> Every 5 bookings = 1 FREE hour</span>
-                    </div>
-                    <div className="flex gap-2">
-                      <span className="text-green-300">🎤</span>
-                      <span className="text-green-200"><strong>Exclusive Access:</strong> Priority slot booking</span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setFormData({ ...formData, vipMember: !formData.vipMember });
-                    }}
-                    className={`text-sm font-bold px-4 py-2 rounded-lg transition-all ${
-                      formData.vipMember
-                        ? 'bg-gradient-to-r from-yellow-400 to-green-400 text-slate-900 shadow-lg shadow-yellow-400/50'
-                        : 'bg-slate-800/50 border border-yellow-400/40 text-yellow-300 hover:border-yellow-300/80 hover:shadow-lg hover:shadow-yellow-400/30'
-                    }`}
-                  >
-                    {formData.vipMember ? '✓ VIP Added (+₹200)' : 'Become VIP'}
-                  </button>
+            <div className="space-y-5 relative z-10">
+              {/* VIP */}
+              <div className="bg-gradient-to-r from-yellow-500/15 via-green-500/15 to-cyan-500/15 border-2 border-yellow-400/40 rounded-xl p-4">
+                <div className="flex items-start gap-3 mb-3">
+                  <span className="text-2xl">👑</span>
+                  <div><h3 className="text-yellow-300 font-black">UNLOCK VIP PERKS</h3><p className="text-green-300/70 text-sm">Just ₹200 · Lifetime Access</p></div>
                 </div>
+                <div className="space-y-1 text-sm mb-3">
+                  <div className="flex gap-2 text-cyan-200"><span>✨</span><span><strong>Triple Threat:</strong> Book 2 weekday hours, get 3rd FREE</span></div>
+                  <div className="flex gap-2 text-yellow-200"><span>⭐</span><span><strong>Loyalty:</strong> Every 5 bookings = 1 FREE hour</span></div>
+                  <div className="flex gap-2 text-green-200"><span>🎤</span><span>Priority booking access</span></div>
+                </div>
+                <button onClick={() => setFormData(p => ({ ...p, vipMember: !p.vipMember }))}
+                  className={`text-sm font-bold px-4 py-2 rounded-lg transition-all ${formData.vipMember ? 'bg-gradient-to-r from-yellow-400 to-green-400 text-slate-900 shadow-lg shadow-yellow-400/40' : 'bg-slate-800/50 border border-yellow-400/40 text-yellow-300 hover:border-yellow-300'}`}>
+                  {formData.vipMember ? '✓ VIP Added (+₹200)' : 'Become VIP'}
+                </button>
               </div>
 
               <div>
-                <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-300 to-cyan-300 mb-2 animate-text-glow" 
-                    style={{ textShadow: '0 0 20px rgba(236,72,153,0.3)' }}>
-                  Your Details
-                </h2>
-                <p className="text-pink-300/80">Tell us who's singing</p>
+                <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-300 to-cyan-300">Your Details</h2>
+                <p className="text-pink-300/50 text-sm mt-1">Tell us who's singing</p>
               </div>
-              <div className="space-y-4">
-                <input
-                  type="text"
-                  placeholder="Full Name"
-                  value={formData.customerName}
-                  onChange={(e) => setFormData({ ...formData, customerName: e.target.value })}
-                  className="w-full px-4 py-3 bg-slate-800/60 border-2 border-pink-400/40 rounded-lg focus:outline-none focus:border-pink-300 focus:ring-2 focus:ring-pink-400/30 text-white placeholder-pink-300/40 transition-all shadow-lg shadow-pink-400/10"
-                />
-                <input
-                  type="email"
-                  placeholder="Email Address"
-                  value={formData.customerEmail}
-                  onChange={(e) => setFormData({ ...formData, customerEmail: e.target.value })}
-                  className="w-full px-4 py-3 bg-slate-800/60 border-2 border-pink-400/40 rounded-lg focus:outline-none focus:border-pink-300 focus:ring-2 focus:ring-pink-400/30 text-white placeholder-pink-300/40 transition-all shadow-lg shadow-pink-400/10"
-                />
-                <input
-                  type="tel"
-                  placeholder="Phone Number"
-                  value={formData.customerPhone}
-                  onChange={(e) => setFormData({ ...formData, customerPhone: e.target.value })}
-                  className="w-full px-4 py-3 bg-slate-800/60 border-2 border-pink-400/40 rounded-lg focus:outline-none focus:border-pink-300 focus:ring-2 focus:ring-pink-400/30 text-white placeholder-pink-300/40 transition-all shadow-lg shadow-pink-400/10"
-                />
+
+              <div className="space-y-3">
+                <input type="text" placeholder="Full Name" value={formData.customerName} onChange={e => setFormData(p => ({ ...p, customerName: e.target.value }))} className="w-full px-4 py-3 bg-slate-800/60 border-2 border-pink-400/40 rounded-lg text-white placeholder-pink-300/30 focus:outline-none focus:border-pink-300 transition-all" />
+                <input type="email" placeholder="Email Address" value={formData.customerEmail} onChange={e => setFormData(p => ({ ...p, customerEmail: e.target.value }))} className="w-full px-4 py-3 bg-slate-800/60 border-2 border-pink-400/40 rounded-lg text-white placeholder-pink-300/30 focus:outline-none focus:border-pink-300 transition-all" />
+                <input type="tel" placeholder="Phone Number" value={formData.customerPhone} onChange={e => setFormData(p => ({ ...p, customerPhone: e.target.value }))} className="w-full px-4 py-3 bg-slate-800/60 border-2 border-pink-400/40 rounded-lg text-white placeholder-pink-300/30 focus:outline-none focus:border-pink-300 transition-all" />
               </div>
-              <div className="bg-gradient-to-r from-cyan-500/15 to-pink-500/15 border border-pink-400/30 p-4 rounded-lg space-y-2 shadow-lg shadow-pink-400/10">
-                <p className="text-pink-300/80 text-sm">Booking Summary</p>
-                <p className="text-white font-bold">{selectedDate} • {selectedSlots.length} hour(s) @ ₹1,180</p>
-                {formData.vipMember && <p className="text-yellow-300 text-sm">+ VIP Membership (one-time): ₹200</p>}
-                <p className="text-cyan-300 text-sm">Deposit: ₹500 (non-refundable)</p>
-                <p className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-magenta-300 animate-text-glow">
-                  ₹{(1180 * selectedSlots.length) + (formData.vipMember ? 200 : 0)}
-                </p>
-              </div>
-              {error && <p className="text-pink-400 font-semibold">{error}</p>}
+
+              {selectedStart !== null && (
+                <div className="bg-slate-800/40 border border-pink-400/20 p-4 rounded-lg text-sm space-y-1">
+                  <p className="text-white font-bold">{selectedDate} · {minutesToTime(selectedStart)} – {minutesToTime(selectedStart + selectedDuration)}</p>
+                  <p className="text-slate-400">{fmtDuration(selectedDuration)} @ ₹{RATE.toLocaleString()}/hr</p>
+                  {formData.vipMember && <p className="text-yellow-300">+ VIP Membership: ₹200</p>}
+                  <p className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-pink-300">₹{(totalAmount + (formData.vipMember ? 200 : 0)).toLocaleString()}</p>
+                </div>
+              )}
+
+              {confirmError && <p className="text-pink-400 text-sm">{confirmError}</p>}
               <div className="flex gap-3">
-                <button
-                  onClick={() => setStep('slots')}
-                  className="flex-1 bg-slate-800/50 border border-slate-600 hover:border-slate-500 text-cyan-300 font-bold py-3 rounded-lg transition-all"
-                >
-                  Back
-                </button>
-                <button
-                  onClick={handleBooking}
-                  disabled={loading}
-                  className="flex-1 bg-gradient-to-r from-pink-500 to-magenta-500 hover:from-pink-400 hover:to-magenta-400 disabled:opacity-50 text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-pink-400/60"
-                >
-                  {loading ? 'Processing...' : 'Proceed to Payment'}
+                <button onClick={() => { setConfirmError(''); setStep('timeline'); }} className="flex-1 bg-slate-800/50 border border-slate-600 text-cyan-300 font-bold py-3 rounded-lg hover:border-slate-500 transition-all">Back</button>
+                <button onClick={() => {
+                  if (!formData.customerName || !formData.customerEmail || !formData.customerPhone) { setConfirmError('Please fill in all required fields'); return; }
+                  setConfirmError(''); setStep('payment');
+                }} className="flex-1 bg-gradient-to-r from-pink-500 to-violet-500 hover:from-pink-400 hover:to-violet-400 text-white font-bold py-3 rounded-lg shadow-lg shadow-pink-400/40 transition-all">
+                  Choose Payment →
                 </button>
               </div>
             </div>
           )}
 
-          {step === 'payment' && (
-            <div className="space-y-6 relative z-10">
+          {/* ── PAYMENT ── */}
+          {step === 'payment' && selectedStart !== null && (
+            <div className="space-y-5 relative z-10">
               <div>
-                <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-magenta-300 mb-2 animate-text-glow" 
-                    style={{ textShadow: '0 0 20px rgba(0,217,255,0.4)' }}>
-                  Secure Payment
-                </h2>
-                <p className="text-cyan-300/80">Complete your booking</p>
+                <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-violet-300">Choose Payment</h2>
+                <p className="text-slate-400 text-sm mt-1">How would you like to pay?</p>
               </div>
-              <div className="bg-gradient-to-r from-cyan-500/20 to-magenta-500/20 border border-cyan-400/40 p-6 rounded-lg space-y-3 shadow-lg shadow-cyan-400/20">
-                <div className="flex justify-between text-sm">
-                  <span className="text-cyan-300/80">Slot</span>
-                  <span className="text-white font-bold">{selectedDate}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-cyan-300/80">Duration</span>
-                  <span className="text-white font-bold">{selectedSlots.length} hour(s)</span>
-                </div>
-                <div className="border-t border-cyan-400/30 pt-3 flex justify-between">
-                  <span className="text-cyan-300">Deposit</span>
-                  <span className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-magenta-300">₹500</span>
+
+              <div className="bg-slate-800/40 border border-cyan-400/20 p-4 rounded-lg space-y-1 text-sm">
+                <div className="flex justify-between"><span className="text-slate-400">Date</span><span className="text-white font-bold">{selectedDate}</span></div>
+                <div className="flex justify-between"><span className="text-slate-400">Time</span><span className="text-white font-bold">{minutesToTime(selectedStart)} – {minutesToTime(selectedStart + selectedDuration)}</span></div>
+                <div className="flex justify-between"><span className="text-slate-400">Duration</span><span className="text-white font-bold">{fmtDuration(selectedDuration)}</span></div>
+                <div className="flex justify-between border-t border-slate-700/60 pt-2 mt-1">
+                  <span className="text-slate-400">Total</span>
+                  <span className="text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-violet-300">₹{totalAmount.toLocaleString()}</span>
                 </div>
               </div>
-              <p className="text-cyan-300/80 text-sm">Pay ₹500 now. Remaining ₹{1180 * selectedSlots.length - 500} at check-in.</p>
-              <button
-                onClick={initializePayment}
-                className="w-full bg-gradient-to-r from-cyan-400 to-magenta-400 hover:from-cyan-300 hover:to-magenta-300 text-slate-900 font-black py-4 rounded-lg transition-all shadow-lg shadow-cyan-400/60 hover:shadow-cyan-400/80 text-lg"
-              >
-                💳 Pay ₹500 with Razorpay
-              </button>
+
+              <div className="border-2 border-cyan-400/40 rounded-xl p-5 bg-cyan-500/5 hover:border-cyan-300/60 transition-all">
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="text-xl">✅</span>
+                  <div><h3 className="text-cyan-300 font-black text-lg">Full Pre-Payment</h3><p className="text-slate-400 text-sm">Nothing due at check-in</p></div>
+                </div>
+                <button onClick={() => handlePaymentChoice('full')} disabled={paymentChoiceLoading !== ''}
+                  className="w-full bg-gradient-to-r from-cyan-400 to-cyan-600 hover:from-cyan-300 hover:to-cyan-500 disabled:opacity-50 text-slate-900 font-black py-3 rounded-lg shadow-lg shadow-cyan-400/30 text-lg transition-all">
+                  {paymentChoiceLoading === 'full' ? 'Opening…' : `💳 Pay ₹${totalAmount.toLocaleString()} Now`}
+                </button>
+              </div>
+
+              <div className="border-2 border-violet-400/40 rounded-xl p-5 bg-violet-500/5 hover:border-violet-300/60 transition-all">
+                <div className="flex items-center gap-3 mb-2">
+                  <span className="text-xl">🔒</span>
+                  <div><h3 className="text-violet-300 font-black text-lg">Reserve with Deposit</h3><p className="text-slate-400 text-sm">₹{DEPOSIT} now · ₹{(totalAmount - DEPOSIT).toLocaleString()} at check-in</p></div>
+                </div>
+                <p className="text-yellow-300/60 text-xs mb-3">⚠️ ₹{DEPOSIT} deposit is strictly non-refundable</p>
+                <button onClick={() => handlePaymentChoice('deposit')} disabled={paymentChoiceLoading !== ''}
+                  className="w-full bg-gradient-to-r from-violet-500 to-pink-500 hover:from-violet-400 hover:to-pink-400 disabled:opacity-50 text-white font-black py-3 rounded-lg shadow-lg shadow-violet-400/30 text-lg transition-all">
+                  {paymentChoiceLoading === 'deposit' ? 'Opening…' : `🔒 Reserve with ₹${DEPOSIT} Deposit`}
+                </button>
+              </div>
+
+              {confirmError && <p className="text-pink-400 text-sm">{confirmError}</p>}
+              <button onClick={() => setStep('form')} disabled={paymentChoiceLoading !== ''}
+                className="w-full bg-slate-800/50 border border-slate-600 text-cyan-300 font-bold py-3 rounded-lg hover:border-slate-500 disabled:opacity-50 transition-all">Back</button>
             </div>
           )}
 
+          {/* ── CONFIRMATION ── */}
           {step === 'confirmation' && (
-            <div className="text-center space-y-6 relative z-10">
+            <div className="text-center space-y-5 relative z-10">
               {bookingCancelled ? (
                 <>
-                  <div className="text-6xl animate-in zoom-in duration-500">❌</div>
-                  <div>
-                    <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-300 to-red-300 mb-2">
-                      Booking Cancelled
-                    </h2>
-                    <p className="text-pink-300/80">Your ₹500 deposit has been forfeited.</p>
+                  <div className="text-6xl">❌</div>
+                  <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-300 to-red-300">Booking Cancelled</h2>
+                  <p className="text-pink-300/60 text-sm">Your ₹{DEPOSIT} deposit has been forfeited.</p>
+                  <div className="bg-pink-500/10 border border-pink-400/20 p-4 rounded-lg text-left">
+                    <p className="text-slate-400 text-xs">Booking ID</p><p className="text-white font-mono font-bold text-sm">{bookingData.bookingId}</p>
                   </div>
-                  <div className="bg-gradient-to-r from-pink-500/10 to-red-500/10 border border-pink-400/30 p-4 rounded-lg text-left">
-                    <p className="text-pink-300/70 text-sm">Booking ID</p>
-                    <p className="text-white font-mono font-bold">{bookingData.bookingId}</p>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setStep('date');
-                      setSelectedDate('');
-                      setSelectedSlots([]);
-                      setFormData({ customerName: '', customerEmail: '', customerPhone: '', vipMember: false });
-                      setAvailability(null);
-                      setBookingCancelled(false);
-                    }}
-                    className="w-full bg-gradient-to-r from-magenta-500 to-pink-500 hover:from-magenta-400 hover:to-pink-400 text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-magenta-400/60"
-                  >
-                    Book Another Slot
-                  </button>
+                  <button onClick={resetAll} className="w-full bg-gradient-to-r from-violet-500 to-pink-500 text-white font-bold py-3 rounded-lg transition-all">Book Another Slot</button>
                 </>
               ) : (
                 <>
-                  <div className="text-6xl animate-in zoom-in duration-500">🎉</div>
+                  <div className="text-6xl">🎉</div>
                   <div>
-                    <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-magenta-300 mb-2 animate-text-glow"
-                        style={{ textShadow: '0 0 20px rgba(0,217,255,0.4)' }}>
-                      You're In!
-                    </h2>
-                    <p className="text-cyan-300/80">Your night is booked</p>
+                    <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-violet-300">You're In!</h2>
+                    <p className="text-slate-400 text-sm">Your night is booked</p>
                   </div>
-                  <div className="bg-gradient-to-r from-cyan-500/15 to-magenta-500/15 border border-cyan-400/30 p-6 rounded-lg text-left space-y-3 shadow-lg shadow-cyan-400/10">
-                    <div>
-                      <p className="text-cyan-300/70 text-sm">Booking ID</p>
-                      <p className="text-white font-mono font-bold">{bookingData.bookingId}</p>
-                    </div>
-                    <div>
-                      <p className="text-cyan-300/70 text-sm">Guest</p>
-                      <p className="text-white font-bold">{formData.customerName}</p>
-                    </div>
+                  <div className="bg-cyan-500/10 border border-cyan-400/25 p-5 rounded-lg text-left space-y-3 text-sm">
+                    <div><p className="text-slate-400 text-xs">Booking ID</p><p className="text-white font-mono font-bold">{bookingData.bookingId}</p></div>
+                    <div><p className="text-slate-400 text-xs">Guest</p><p className="text-white font-bold">{formData.customerName}</p></div>
+                    {selectedStart !== null && (
+                      <div>
+                        <p className="text-slate-400 text-xs">Session</p>
+                        <p className="text-white font-bold">{selectedDate} · {minutesToTime(selectedStart)} – {minutesToTime(selectedStart + selectedDuration)}</p>
+                        <p className="text-slate-500 text-xs">{fmtDuration(selectedDuration)}</p>
+                      </div>
+                    )}
+                    {bookingData.paymentType === 'deposit' && bookingData.balanceDue > 0 && (
+                      <div className="border-t border-cyan-400/20 pt-3">
+                        <p className="text-yellow-300/60 text-xs">Balance due at check-in</p>
+                        <p className="text-yellow-300 font-black text-xl">₹{bookingData.balanceDue.toLocaleString()}</p>
+                      </div>
+                    )}
+                    {bookingData.paymentType === 'full' && (
+                      <div className="border-t border-cyan-400/20 pt-3">
+                        <p className="text-green-300 font-bold">✅ Fully paid — nothing due at check-in</p>
+                      </div>
+                    )}
                   </div>
-                  <p className="text-cyan-300/80">Confirmation sent to <span className="text-white font-bold">{formData.customerEmail}</span></p>
-                  {error && <p className="text-pink-400 font-semibold">{error}</p>}
-                  <button
-                    onClick={() => {
-                      setStep('date');
-                      setSelectedDate('');
-                      setSelectedSlots([]);
-                      setFormData({ customerName: '', customerEmail: '', customerPhone: '', vipMember: false });
-                      setAvailability(null);
-                    }}
-                    className="w-full bg-gradient-to-r from-magenta-500 to-pink-500 hover:from-magenta-400 hover:to-pink-400 text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-magenta-400/60"
-                  >
-                    Book Another Slot
-                  </button>
-                  <button
-                    onClick={handleCancelBooking}
-                    disabled={cancelLoading}
-                    className="w-full bg-slate-800/50 border border-red-500/40 hover:border-red-400/70 disabled:opacity-50 text-red-400 hover:text-red-300 font-bold py-3 rounded-lg transition-all"
-                  >
-                    {cancelLoading ? 'Cancelling...' : 'Cancel Booking'}
+                  <p className="text-slate-400 text-sm">Confirmation sent to <span className="text-white">{formData.customerEmail}</span></p>
+                  {confirmError && <p className="text-pink-400 text-sm">{confirmError}</p>}
+                  <button onClick={resetAll} className="w-full bg-gradient-to-r from-violet-500 to-pink-500 text-white font-bold py-3 rounded-lg transition-all">Book Another Slot</button>
+                  <button onClick={handleCancelBooking} disabled={cancelLoading}
+                    className="w-full bg-slate-800/50 border border-red-500/40 hover:border-red-400 text-red-400 hover:text-red-300 font-bold py-3 rounded-lg disabled:opacity-50 transition-all">
+                    {cancelLoading ? 'Cancelling…' : 'Cancel Booking'}
                   </button>
                 </>
               )}
@@ -589,33 +491,6 @@ export default function BookingPage() {
           )}
         </div>
       </div>
-
-      <style jsx>{`
-        @keyframes neon-vibe {
-          0%, 100% { 
-            opacity: 0.3;
-            transform: scale(1);
-          }
-          50% { 
-            opacity: 0.8;
-            transform: scale(1.1);
-          }
-        }
-        @keyframes text-glow {
-          0%, 100% {
-            text-shadow: 0 0 20px rgba(0,217,255,0.4), 0 0 40px rgba(236,72,153,0.2);
-          }
-          50% {
-            text-shadow: 0 0 30px rgba(0,217,255,0.6), 0 0 60px rgba(236,72,153,0.4), 0 0 90px rgba(139,92,246,0.3);
-          }
-        }
-        .animate-neon-vibe {
-          animation: neon-vibe 2.5s ease-in-out infinite;
-        }
-        .animate-text-glow {
-          animation: text-glow 3s ease-in-out infinite;
-        }
-      `}</style>
     </div>
   );
 }

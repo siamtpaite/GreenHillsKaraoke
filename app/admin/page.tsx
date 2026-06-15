@@ -2,13 +2,14 @@
 
 import { useState, useEffect } from 'react';
 import Image from 'next/image';
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-} from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
-const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE ?? '1180');
-const HOURS_START = 12;
-const HOURS_END = 22;
+const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE ?? '50');
+
+// Admin timeline: 10 AM – midnight
+const ADMIN_START = 600;   // 10:00
+const ADMIN_END   = 1440;  // 24:00 (midnight)
+const ADMIN_SPAN  = ADMIN_END - ADMIN_START;
 
 type AdminTab = 'bookings' | 'analytics' | 'blackout';
 type AnalyticsPeriod = 'today' | 'week' | 'month';
@@ -19,17 +20,25 @@ interface Booking {
   customerEmail: string;
   customerPhone: string;
   date: string;
+  // New fields
+  startTime?: number;
+  duration?: number;
+  endTime?: number;
+  // Legacy fields (old bookings)
+  startMinute?: number;
   startHour?: number;
-  hours: number;
-  hourList?: string[];
+  hours?: number;
   totalAmount: number;
   depositPaid: number;
+  paidAmount?: number;
   amountDue?: number;
+  balanceDue?: number;
+  paymentType?: 'full' | 'deposit';
   status: string;
   notes?: string;
   createdAt: any;
-  checkInTime?: string;
-  checkOutTime?: string;
+  checkInTime?: any;
+  checkOutTime?: any;
 }
 
 interface OfflineForm {
@@ -37,71 +46,84 @@ interface OfflineForm {
   customerPhone: string;
   customerEmail: string;
   date: string;
-  startHour: number;
-  hours: number;
+  startTime: number;   // minutes from midnight
+  duration: number;    // minutes
   amountPaid: number;
   notes: string;
 }
 
-interface BlackoutDate {
-  id: string;
-  date: string;
-  reason: string;
-  createdBy: string;
-  createdAt: any;
-}
-
-interface BlackoutForm {
-  startDate: string;
-  endDate: string;
-  reason: string;
-}
-
+interface BlackoutDate { id: string; date: string; reason: string; createdBy: string; createdAt: any; }
+interface BlackoutForm { startDate: string; endDate: string; reason: string; }
 interface AnalyticsData {
-  totalRevenue: number;
-  bookingsCount: number;
-  pendingPayments: number;
-  noShows: number;
-  cancellations: number;
+  totalRevenue: number; bookingsCount: number; pendingPayments: number;
+  noShows: number; cancellations: number;
   dailyData: { date: string; revenue: number; count: number }[];
 }
 
-function fmtHour(h: number): string {
-  if (h < 12) return `${h}:00 AM`;
-  if (h === 12) return '12:00 PM';
-  return `${h - 12}:00 PM`;
+// Resolve start/end minutes from any booking format
+function bookingStart(b: Booking): number {
+  return b.startTime ?? b.startMinute ?? (b.startHour != null ? b.startHour * 60 : ADMIN_START);
+}
+function bookingDuration(b: Booking): number {
+  return b.duration ?? (b.hours != null ? b.hours * 60 : 60);
+}
+function bookingEnd(b: Booking): number {
+  return b.endTime ?? bookingStart(b) + bookingDuration(b);
+}
+
+function minutesToTime(min: number): string {
+  if (min >= 1440) return '12:00 AM';
+  const h = Math.floor(min / 60), m = min % 60;
+  const period = h >= 12 ? 'PM' : 'AM';
+  const dh = h > 12 ? h - 12 : h === 0 ? 12 : h;
+  return `${dh}:${m.toString().padStart(2, '0')} ${period}`;
+}
+
+function fmtDuration(min: number): string {
+  const h = Math.floor(min / 60), m = min % 60;
+  if (m === 0) return `${h}h`;
+  if (h === 0) return `${m}min`;
+  return `${h}h ${m}min`;
 }
 
 function fmtDate(d: string): string {
   return new Date(d + 'T12:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
 }
 
-function bookingStartHour(b: Booking): number {
-  return b.startHour ?? Number(b.hourList?.[0] ?? HOURS_START);
-}
+// Generate 5-min time options for admin (10 AM to 11:30 PM)
+const TIME_OPTS = Array.from(
+  { length: (ADMIN_END - ADMIN_START - 30) / 5 },
+  (_, i) => ADMIN_START + i * 5
+);
 
-const HOUR_OPTS = Array.from({ length: HOURS_END - HOURS_START }, (_, i) => HOURS_START + i);
+const DURATION_OPTS = [
+  { label: '30 min', value: 30 }, { label: '1 hr', value: 60 },
+  { label: '1.5 hr', value: 90 }, { label: '2 hr', value: 120 },
+  { label: '2.5 hr', value: 150 }, { label: '3 hr', value: 180 },
+  { label: '4 hr', value: 240 }, { label: '5 hr', value: 300 },
+  { label: '6 hr', value: 360 },
+];
 
 const EMPTY_FORM: OfflineForm = {
-  customerName: '',
-  customerPhone: '',
-  customerEmail: '',
-  date: '',
-  startHour: 14,
-  hours: 2,
-  amountPaid: HOURLY_RATE * 2,
-  notes: '',
+  customerName: '', customerPhone: '', customerEmail: '',
+  date: '', startTime: 14 * 60, duration: 120, amountPaid: HOURLY_RATE * 2, notes: '',
 };
 
-const INPUT_CLS =
-  'w-full px-3 py-2 bg-slate-800/60 border border-cyan-400/30 rounded-lg text-white placeholder-cyan-300/30 focus:outline-none focus:border-cyan-300 text-sm';
-const LABEL_CLS = 'block text-cyan-300/70 text-xs mb-1';
+const INPUT_CLS = 'w-full px-3 py-2 bg-slate-800/60 border border-cyan-400/30 rounded-lg text-white placeholder-cyan-300/30 focus:outline-none focus:border-cyan-300 text-sm';
+const LABEL_CLS = 'block text-cyan-300/60 text-xs mb-1';
+const PERIOD_LABELS: Record<AnalyticsPeriod, string> = { today: 'Today', week: 'This Week', month: 'This Month' };
 
-const PERIOD_LABELS: Record<AnalyticsPeriod, string> = {
-  today: 'Today',
-  week: 'This Week',
-  month: 'This Month',
-};
+// Timeline bar colors by status/paymentType
+function bookingColor(b: Booking): { bg: string; border: string; text: string } {
+  if (b.status === 'checked_in') return { bg: 'bg-blue-500/70', border: 'border-blue-400', text: 'text-blue-100' };
+  if (b.status === 'confirmed' && b.paymentType === 'full') return { bg: 'bg-emerald-500/70', border: 'border-emerald-400', text: 'text-emerald-100' };
+  if (b.status === 'confirmed') return { bg: 'bg-yellow-500/70', border: 'border-yellow-400', text: 'text-yellow-100' };
+  if (b.status === 'completed') return { bg: 'bg-slate-500/50', border: 'border-slate-400', text: 'text-slate-300' };
+  return { bg: 'bg-red-500/40', border: 'border-red-400/60', text: 'text-red-300' };
+}
+
+const pctL = (min: number) => `${((min - ADMIN_START) / ADMIN_SPAN * 100).toFixed(3)}%`;
+const pctW = (dur: number) => `${(dur / ADMIN_SPAN * 100).toFixed(3)}%`;
 
 export default function AdminDashboard() {
   const [authenticated, setAuthenticated] = useState(false);
@@ -110,6 +132,7 @@ export default function AdminDashboard() {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
 
   const [showModal, setShowModal] = useState(false);
   const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
@@ -133,28 +156,19 @@ export default function AdminDashboard() {
   const ADMIN_PASSWORD = 'GreenHills2021';
 
   const handleLogin = () => {
-    if (password === ADMIN_PASSWORD) {
-      setAuthenticated(true);
-      setPassword('');
-      fetchBookings();
-    } else {
-      setError('Invalid password');
-    }
+    if (password === ADMIN_PASSWORD) { setAuthenticated(true); setPassword(''); fetchBookings(); }
+    else setError('Invalid password');
   };
 
   const fetchBookings = async (date?: string) => {
-    setLoading(true);
-    setError('');
+    setLoading(true); setError('');
     try {
       const res = await fetch(`/api/admin/bookings?date=${date ?? selectedDate}`);
       const data = await res.json();
       if (data.success) setBookings(data.data);
       else setError('Failed to fetch bookings');
-    } catch {
-      setError('Error fetching bookings');
-    } finally {
-      setLoading(false);
-    }
+    } catch { setError('Error fetching bookings'); }
+    finally { setLoading(false); }
   };
 
   const fetchFormBookings = async (date: string) => {
@@ -175,58 +189,6 @@ export default function AdminDashboard() {
     finally { setBlackoutLoading(false); }
   };
 
-  const expandDateRange = (start: string, end: string): string[] => {
-    const dates: string[] = [];
-    const cur = new Date(start + 'T12:00');
-    const last = new Date(end + 'T12:00');
-    while (cur <= last) {
-      dates.push(cur.toISOString().split('T')[0]);
-      cur.setDate(cur.getDate() + 1);
-    }
-    return dates;
-  };
-
-  const handleBlockDates = async () => {
-    const { startDate, endDate, reason } = blackoutForm;
-    if (!startDate) { setBlackoutError('Please select a date.'); return; }
-    const effectiveEnd = endDate && endDate >= startDate ? endDate : startDate;
-    const dates = expandDateRange(startDate, effectiveEnd).map((date) => ({ date, reason }));
-
-    setBlackoutSubmitting(true);
-    setBlackoutError('');
-    try {
-      const res = await fetch('/api/admin/blackout-dates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: ADMIN_PASSWORD, dates }),
-      });
-      const data = await res.json();
-      if (!data.success) { setBlackoutError(data.error ?? 'Failed to block dates'); return; }
-      setBlackoutForm({ startDate: '', endDate: '', reason: '' });
-      fetchBlackoutDates();
-    } catch {
-      setBlackoutError('Network error. Please try again.');
-    } finally {
-      setBlackoutSubmitting(false);
-    }
-  };
-
-  const handleUnblockDate = async (date: string) => {
-    if (!confirm(`Unblock ${fmtDate(date)}? Customers will be able to book this date again.`)) return;
-    try {
-      const res = await fetch(`/api/admin/blackout-dates/${date}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: ADMIN_PASSWORD }),
-      });
-      const data = await res.json();
-      if (data.success) fetchBlackoutDates();
-      else setBlackoutError(data.error ?? 'Failed to unblock date');
-    } catch {
-      setBlackoutError('Network error. Please try again.');
-    }
-  };
-
   const fetchAnalytics = async (period: AnalyticsPeriod = analyticsPeriod) => {
     setAnalyticsLoading(true);
     try {
@@ -237,81 +199,95 @@ export default function AdminDashboard() {
     finally { setAnalyticsLoading(false); }
   };
 
+  const expandDateRange = (start: string, end: string): string[] => {
+    const dates: string[] = [];
+    const cur = new Date(start + 'T12:00'), last = new Date(end + 'T12:00');
+    while (cur <= last) { dates.push(cur.toISOString().split('T')[0]); cur.setDate(cur.getDate() + 1); }
+    return dates;
+  };
+
+  const handleBlockDates = async () => {
+    const { startDate, endDate, reason } = blackoutForm;
+    if (!startDate) { setBlackoutError('Please select a date.'); return; }
+    const effectiveEnd = endDate && endDate >= startDate ? endDate : startDate;
+    const dates = expandDateRange(startDate, effectiveEnd).map(date => ({ date, reason }));
+    setBlackoutSubmitting(true); setBlackoutError('');
+    try {
+      const res = await fetch('/api/admin/blackout-dates', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: ADMIN_PASSWORD, dates }),
+      });
+      const data = await res.json();
+      if (!data.success) { setBlackoutError(data.error ?? 'Failed to block dates'); return; }
+      setBlackoutForm({ startDate: '', endDate: '', reason: '' });
+      fetchBlackoutDates();
+    } catch { setBlackoutError('Network error. Please try again.'); }
+    finally { setBlackoutSubmitting(false); }
+  };
+
+  const handleUnblockDate = async (date: string) => {
+    if (!confirm(`Unblock ${fmtDate(date)}?`)) return;
+    try {
+      const res = await fetch(`/api/admin/blackout-dates/${date}`, {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: ADMIN_PASSWORD }),
+      });
+      const data = await res.json();
+      if (data.success) fetchBlackoutDates(); else setBlackoutError(data.error ?? 'Failed to unblock date');
+    } catch { setBlackoutError('Network error.'); }
+  };
+
   useEffect(() => { setMounted(true); }, []);
+  useEffect(() => { if (showModal && form.date) fetchFormBookings(form.date); }, [showModal, form.date]);
+  useEffect(() => { if (authenticated && activeTab === 'analytics') fetchAnalytics(analyticsPeriod); }, [authenticated, activeTab, analyticsPeriod]);
+  useEffect(() => { if (authenticated && activeTab === 'blackout') fetchBlackoutDates(); }, [authenticated, activeTab]);
 
-  useEffect(() => {
-    if (showModal && form.date) fetchFormBookings(form.date);
-  }, [showModal, form.date]);
-
-  useEffect(() => {
-    if (authenticated && activeTab === 'analytics') fetchAnalytics(analyticsPeriod);
-  }, [authenticated, activeTab, analyticsPeriod]);
-
-  useEffect(() => {
-    if (authenticated && activeTab === 'blackout') fetchBlackoutDates();
-  }, [authenticated, activeTab]);
-
+  // Conflict detection: range overlap against other bookings on the same date
   const conflict = (() => {
     if (!showModal) return null;
-    const slots = Array.from({ length: form.hours }, (_, i) => String(form.startHour + i));
-    const hit = formBookings.find((b) => {
+    const propStart = form.startTime;
+    const propEnd = form.startTime + form.duration;
+    const hit = formBookings.find(b => {
       if (b.id === editingBooking?.id) return false;
       if (['cancelled', 'completed'].includes(b.status)) return false;
-      return (b.hourList ?? []).some((h) => slots.includes(h));
+      const bStart = bookingStart(b), bEnd = bookingEnd(b);
+      return propStart < bEnd && propEnd > bStart;
     });
-    return hit ? `Slot taken by ${hit.customerName} (${fmtHour(bookingStartHour(hit))})` : null;
+    return hit ? `Slot taken by ${hit.customerName} (${minutesToTime(bookingStart(hit))})` : null;
   })();
 
-  const maxHours = Math.min(8, HOURS_END - form.startHour);
-  const expectedTotal = HOURLY_RATE * form.hours;
-
-  const setField = <K extends keyof OfflineForm>(k: K, v: OfflineForm[K]) =>
-    setForm((p) => ({ ...p, [k]: v }));
+  const expectedTotal = Math.ceil(form.duration / 60) * HOURLY_RATE;
+  const setField = <K extends keyof OfflineForm>(k: K, v: OfflineForm[K]) => setForm(p => ({ ...p, [k]: v }));
 
   const openCreate = () => {
     setEditingBooking(null);
     setForm({ ...EMPTY_FORM, date: selectedDate });
-    setFormError('');
-    setShowModal(true);
+    setFormError(''); setShowModal(true);
   };
 
   const openEdit = (b: Booking) => {
     setEditingBooking(b);
     setForm({
-      customerName: b.customerName,
-      customerPhone: b.customerPhone,
-      customerEmail: b.customerEmail ?? '',
-      date: b.date,
-      startHour: bookingStartHour(b),
-      hours: b.hours,
-      amountPaid: b.depositPaid,
-      notes: b.notes ?? '',
+      customerName: b.customerName, customerPhone: b.customerPhone, customerEmail: b.customerEmail ?? '',
+      date: b.date, startTime: bookingStart(b), duration: bookingDuration(b),
+      amountPaid: b.paidAmount ?? b.depositPaid, notes: b.notes ?? '',
     });
-    setFormError('');
-    setShowModal(true);
+    setFormError(''); setShowModal(true);
   };
 
-  const closeModal = () => {
-    setShowModal(false);
-    setEditingBooking(null);
-    setFormBookings([]);
-  };
+  const closeModal = () => { setShowModal(false); setEditingBooking(null); setFormBookings([]); };
 
   const handleSubmit = async () => {
     if (conflict) { setFormError(conflict); return; }
     if (!form.customerName.trim()) { setFormError('Guest name is required'); return; }
-    if (!/^\d{10}$/.test(form.customerPhone.replace(/[^\d]/g, ''))) {
-      setFormError('Enter a valid 10-digit phone number'); return;
-    }
+    if (!/^\d{10}$/.test(form.customerPhone.replace(/[^\d]/g, ''))) { setFormError('Enter a valid 10-digit phone number'); return; }
     if (!form.date) { setFormError('Date is required'); return; }
-
-    setFormLoading(true);
-    setFormError('');
+    setFormLoading(true); setFormError('');
     try {
       const payload = {
         ...form,
-        startHour: Number(form.startHour),
-        hours: Number(form.hours),
+        startTime: Number(form.startTime),
+        duration: Number(form.duration),
         amountPaid: Number(form.amountPaid),
         ...(editingBooking ? { bookingId: editingBooking.id } : {}),
       };
@@ -325,19 +301,15 @@ export default function AdminDashboard() {
       closeModal();
       if (form.date !== selectedDate) setSelectedDate(form.date);
       fetchBookings(form.date);
-    } catch {
-      setFormError('Network error. Please try again.');
-    } finally {
-      setFormLoading(false);
-    }
+    } catch { setFormError('Network error. Please try again.'); }
+    finally { setFormLoading(false); }
   };
 
   const handleCheckIn = async (bookingId: string) => {
     try {
       const res = await fetch(`/api/admin/bookings/${bookingId}/checkin`, { method: 'POST' });
       const data = await res.json();
-      if (data.success) fetchBookings();
-      else setError('Check-in failed');
+      if (data.success) fetchBookings(); else setError('Check-in failed');
     } catch { setError('Error checking in'); }
   };
 
@@ -345,51 +317,46 @@ export default function AdminDashboard() {
     try {
       const res = await fetch(`/api/admin/bookings/${bookingId}/checkout`, { method: 'POST' });
       const data = await res.json();
-      if (data.success) fetchBookings();
-      else setError('Check-out failed');
+      if (data.success) fetchBookings(); else setError('Check-out failed');
     } catch { setError('Error checking out'); }
   };
 
   const handleCancel = async (bookingId: string) => {
-    if (!confirm('⚠️ Cancel this booking? Guest loses ₹500 non-refundable deposit. Continue?')) return;
+    if (!confirm('⚠️ Cancel this booking? Guest loses ₹50 non-refundable deposit. Continue?')) return;
     try {
       const res = await fetch(`/api/admin/bookings/${bookingId}/cancel`, { method: 'POST' });
       const data = await res.json();
-      if (data.success) fetchBookings();
-      else setError('Cancellation failed');
+      if (data.success) { setSelectedBooking(null); fetchBookings(); } else setError('Cancellation failed');
     } catch { setError('Error cancelling booking'); }
   };
 
+  // Active bookings for the timeline
+  const activeBookings = bookings.filter(b => !['cancelled'].includes(b.status));
+
+  // Admin hour labels (10 AM to midnight)
+  const adminHourLabels = Array.from({ length: 15 }, (_, i) => ADMIN_START + i * 60);
+
   if (!authenticated) {
     return (
-      <div className="min-h-screen bg-slate-950 relative overflow-hidden flex items-center justify-center py-12 px-4">
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center py-12 px-4 relative overflow-hidden">
         <div className="fixed inset-0 overflow-hidden pointer-events-none">
           <div className="absolute top-20 left-10 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl animate-pulse" />
-          <div className="absolute bottom-20 right-10 w-96 h-96 bg-magenta-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
+          <div className="absolute bottom-20 right-10 w-96 h-96 bg-pink-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
         </div>
         <div className="max-w-md w-full relative z-10">
           <div className="backdrop-blur-xl bg-slate-900/50 border border-cyan-400/30 rounded-2xl p-8 shadow-2xl shadow-cyan-400/20">
             <div className="text-center mb-8">
               <Image src="/logo.png" alt="Green Hills" width={80} height={80} className="mx-auto mb-4 opacity-90" />
-              <h1 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-magenta-300" style={{ textShadow: '0 0 20px rgba(0,217,255,0.4)' }}>
-                ADMIN LOGIN
-              </h1>
-              <p className="text-cyan-300/70 text-sm mt-2">Prez Pu&apos; Control Room</p>
+              <h1 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-pink-300" style={{ textShadow: '0 0 20px rgba(0,217,255,0.4)' }}>ADMIN LOGIN</h1>
+              <p className="text-cyan-300/50 text-sm mt-2">Prez Pu&apos; Control Room</p>
             </div>
             <div className="space-y-4">
-              <input
-                type="password"
-                placeholder="Enter admin password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-                className="w-full px-4 py-3 bg-slate-800/60 border-2 border-cyan-400/40 rounded-lg focus:outline-none focus:border-cyan-300 text-white placeholder-cyan-300/40"
-              />
+              <input type="password" placeholder="Enter admin password" value={password}
+                onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleLogin()}
+                className="w-full px-4 py-3 bg-slate-800/60 border-2 border-cyan-400/40 rounded-lg text-white placeholder-cyan-300/30 focus:outline-none focus:border-cyan-300" />
               {error && <p className="text-pink-400 text-sm">{error}</p>}
-              <button
-                onClick={handleLogin}
-                className="w-full bg-gradient-to-r from-cyan-400 to-magenta-400 hover:from-cyan-300 hover:to-magenta-300 text-slate-900 font-black py-3 rounded-lg shadow-lg shadow-cyan-400/50"
-              >
+              <button onClick={handleLogin}
+                className="w-full bg-gradient-to-r from-cyan-400 to-pink-500 hover:from-cyan-300 hover:to-pink-400 text-slate-900 font-black py-3 rounded-lg shadow-lg shadow-cyan-400/40">
                 🔓 Unlock Dashboard
               </button>
             </div>
@@ -403,169 +370,184 @@ export default function AdminDashboard() {
     <div className="min-h-screen bg-slate-950 relative overflow-hidden py-12 px-4">
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-20 left-10 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl animate-pulse" />
-        <div className="absolute bottom-20 right-10 w-96 h-96 bg-magenta-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
+        <div className="absolute bottom-20 right-10 w-96 h-96 bg-pink-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
       </div>
 
       <div className="max-w-6xl mx-auto relative z-10">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-magenta-300" style={{ textShadow: '0 0 20px rgba(0,217,255,0.4)' }}>
-              BOOKING CONTROL
-            </h1>
-            <p className="text-cyan-300/70 mt-1">Manage sessions</p>
+            <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-pink-300" style={{ textShadow: '0 0 20px rgba(0,217,255,0.4)' }}>BOOKING CONTROL</h1>
+            <p className="text-cyan-300/50 mt-1 text-sm">Manage sessions</p>
           </div>
-          <button
-            onClick={() => setAuthenticated(false)}
-            className="bg-slate-800/50 border border-slate-600 text-cyan-300 px-4 py-2 rounded-lg hover:border-slate-500"
-          >
+          <button onClick={() => setAuthenticated(false)}
+            className="bg-slate-800/50 border border-slate-600 text-cyan-300 px-4 py-2 rounded-lg hover:border-slate-500 text-sm">
             🚪 Logout
           </button>
         </div>
 
         {/* Tabs */}
         <div className="mb-6 flex gap-2 flex-wrap">
-          {([
-            ['bookings',  '📋 Bookings'],
-            ['analytics', '📊 Analytics'],
-            ['blackout',  '🚫 Blackout Dates'],
-          ] as [AdminTab, string][]).map(([tab, label]) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-5 py-2 rounded-lg font-bold text-sm transition-all ${
-                activeTab === tab
-                  ? 'bg-gradient-to-r from-cyan-500 to-magenta-500 text-white shadow-lg shadow-cyan-500/30'
-                  : 'bg-slate-800/50 border border-slate-600 text-cyan-300/70 hover:border-slate-500'
-              }`}
-            >
-              {label}
+          {(['bookings','analytics','blackout'] as AdminTab[]).map(tab => (
+            <button key={tab} onClick={() => setActiveTab(tab)}
+              className={`px-5 py-2 rounded-lg font-bold text-sm transition-all ${activeTab === tab ? 'bg-gradient-to-r from-cyan-500 to-pink-500 text-white shadow-lg shadow-cyan-500/30' : 'bg-slate-800/50 border border-slate-600 text-cyan-300/60 hover:border-slate-500'}`}>
+              {tab === 'bookings' ? '📋 Bookings' : tab === 'analytics' ? '📊 Analytics' : '🚫 Blackout Dates'}
             </button>
           ))}
         </div>
 
-        {/* ── Bookings Tab ── */}
+        {/* ── BOOKINGS TAB ── */}
         {activeTab === 'bookings' && (
           <>
-            <div className="mb-8 flex flex-wrap gap-3 items-center">
-              <input
-                type="date"
-                value={selectedDate}
-                onChange={(e) => {
-                  setSelectedDate(e.target.value);
-                  fetchBookings(e.target.value);
-                }}
-                className="px-4 py-2 bg-slate-800/60 border-2 border-cyan-400/40 rounded-lg text-white focus:border-cyan-300"
-              />
-              <button
-                onClick={() => fetchBookings()}
-                className="bg-gradient-to-r from-cyan-500 to-magenta-500 text-white px-4 py-2 rounded-lg font-bold hover:from-cyan-400 hover:to-magenta-400"
-              >
+            <div className="mb-6 flex flex-wrap gap-3 items-center">
+              <input type="date" value={selectedDate}
+                onChange={e => { setSelectedDate(e.target.value); fetchBookings(e.target.value); }}
+                className="px-4 py-2 bg-slate-800/60 border-2 border-cyan-400/40 rounded-lg text-white focus:border-cyan-300 text-sm" />
+              <button onClick={() => fetchBookings()}
+                className="bg-gradient-to-r from-cyan-500 to-pink-500 text-white px-4 py-2 rounded-lg font-bold text-sm hover:from-cyan-400 hover:to-pink-400">
                 🔄 Refresh
               </button>
-              <button
-                onClick={openCreate}
-                className="ml-auto bg-gradient-to-r from-violet-500 to-cyan-500 hover:from-violet-400 hover:to-cyan-400 text-white px-5 py-2 rounded-lg font-bold shadow-lg shadow-violet-500/30"
-              >
+              <button onClick={openCreate}
+                className="ml-auto bg-gradient-to-r from-violet-500 to-cyan-500 hover:from-violet-400 hover:to-cyan-400 text-white px-5 py-2 rounded-lg font-bold text-sm shadow-lg shadow-violet-500/30">
                 + Create Offline Booking
               </button>
             </div>
 
-            {error && (
-              <div className="mb-6 p-4 bg-pink-500/20 border border-pink-400/40 rounded-lg text-pink-300">
-                {error}
+            {error && <div className="mb-4 p-3 bg-pink-500/20 border border-pink-400/40 rounded-lg text-pink-300 text-sm">{error}</div>}
+
+            {/* Visual Timeline */}
+            {!loading && activeBookings.length > 0 && (
+              <div className="mb-6 backdrop-blur-xl bg-slate-900/40 border border-cyan-400/20 rounded-xl p-5">
+                <h3 className="text-cyan-300/70 text-xs font-bold uppercase tracking-wider mb-3">Timeline — {selectedDate}</h3>
+
+                {/* Hour labels */}
+                <div className="relative h-5 mb-1">
+                  {adminHourLabels.map(min => (
+                    <span key={min} className="absolute text-[9px] text-slate-500 -translate-x-1/2 whitespace-nowrap" style={{ left: pctL(min) }}>
+                      {minutesToTime(min)}
+                    </span>
+                  ))}
+                </div>
+
+                {/* Timeline bar */}
+                <div className="relative h-12 bg-slate-800/60 border border-slate-700/40 rounded-lg overflow-hidden">
+                  {/* Hour tick lines */}
+                  {adminHourLabels.map(min => (
+                    <div key={min} className="absolute top-0 h-full w-px bg-slate-600/30" style={{ left: pctL(min) }} />
+                  ))}
+
+                  {/* Booking bars */}
+                  {activeBookings.map(b => {
+                    const bStart = bookingStart(b), bEnd = bookingEnd(b);
+                    const visStart = Math.max(bStart, ADMIN_START), visEnd = Math.min(bEnd, ADMIN_END);
+                    if (visEnd <= visStart) return null;
+                    const colors = bookingColor(b);
+                    return (
+                      <button key={b.id}
+                        onClick={() => setSelectedBooking(selectedBooking?.id === b.id ? null : b)}
+                        className={`absolute top-0 h-full ${colors.bg} border-l-2 border-r ${colors.border} flex items-center px-1 hover:brightness-110 transition-all ${selectedBooking?.id === b.id ? 'ring-2 ring-white/40' : ''}`}
+                        style={{ left: pctL(visStart), width: pctW(visEnd - visStart) }}
+                        title={`${b.customerName} · ${minutesToTime(bStart)} – ${minutesToTime(bEnd)}`}>
+                        <span className={`text-[9px] font-bold truncate ${colors.text}`}>{b.customerName}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Legend */}
+                <div className="flex flex-wrap gap-3 mt-2 text-[10px] text-slate-500">
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-emerald-500/70 inline-block" /> Full payment</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-yellow-500/70 inline-block" /> Deposit only</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-blue-500/70 inline-block" /> Checked in</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-slate-500/60 inline-block" /> Completed</span>
+                </div>
+              </div>
+            )}
+
+            {/* Selected booking detail panel */}
+            {selectedBooking && (
+              <div className="mb-4 backdrop-blur-xl bg-slate-900/40 border border-violet-400/30 rounded-xl p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-violet-300 font-black">{selectedBooking.customerName}</h3>
+                  <button onClick={() => setSelectedBooking(null)} className="text-slate-400 hover:text-white text-lg">✕</button>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-4">
+                  <div><p className="text-slate-400 text-xs">Time</p>
+                    <p className="text-white font-bold">{minutesToTime(bookingStart(selectedBooking))} – {minutesToTime(bookingEnd(selectedBooking))}</p></div>
+                  <div><p className="text-slate-400 text-xs">Duration</p>
+                    <p className="text-white font-bold">{fmtDuration(bookingDuration(selectedBooking))}</p></div>
+                  <div><p className="text-slate-400 text-xs">Amount</p>
+                    <p className="text-white font-bold">₹{selectedBooking.totalAmount}
+                      {(selectedBooking.balanceDue ?? selectedBooking.amountDue ?? 0) > 0 && (
+                        <span className="text-yellow-400 text-xs ml-1">(due ₹{selectedBooking.balanceDue ?? selectedBooking.amountDue})</span>
+                      )}
+                    </p></div>
+                  <div><p className="text-slate-400 text-xs">Status</p>
+                    <p className={`font-bold text-sm ${selectedBooking.status === 'confirmed' ? 'text-green-400' : selectedBooking.status === 'checked_in' ? 'text-blue-400' : selectedBooking.status === 'completed' ? 'text-cyan-400' : 'text-yellow-400'}`}>
+                      {selectedBooking.status.toUpperCase()}
+                    </p></div>
+                </div>
+                <div className="text-xs text-slate-400 mb-3 space-y-1">
+                  <p>📱 {selectedBooking.customerPhone}</p>
+                  <p>📧 {selectedBooking.customerEmail || '—'}</p>
+                  {selectedBooking.notes && <p>📝 {selectedBooking.notes}</p>}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {selectedBooking.status === 'confirmed' && (
+                    <button onClick={() => handleCheckIn(selectedBooking.id)}
+                      className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-400 hover:to-emerald-400 text-white px-4 py-2 rounded-lg font-bold text-sm">
+                      ✅ Check In
+                    </button>
+                  )}
+                  {selectedBooking.status === 'checked_in' && (
+                    <button onClick={() => handleCheckOut(selectedBooking.id)}
+                      className="bg-gradient-to-r from-blue-500 to-cyan-500 text-white px-4 py-2 rounded-lg font-bold text-sm">
+                      🏁 Check Out
+                    </button>
+                  )}
+                  {['confirmed', 'checked_in'].includes(selectedBooking.status) && (
+                    <>
+                      <button onClick={() => openEdit(selectedBooking)}
+                        className="bg-gradient-to-r from-violet-500 to-purple-500 text-white px-4 py-2 rounded-lg font-bold text-sm">
+                        ✏️ Edit
+                      </button>
+                      <button onClick={() => handleCancel(selectedBooking.id)}
+                        className="bg-gradient-to-r from-pink-500 to-red-500 text-white px-4 py-2 rounded-lg font-bold text-sm">
+                        ❌ Cancel
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
             )}
 
             {loading ? (
-              <div className="text-center text-cyan-300">Loading bookings...</div>
+              <div className="text-center text-cyan-300 text-sm py-8">Loading bookings…</div>
             ) : (
-              <div className="grid gap-4">
+              <div className="grid gap-3">
                 {bookings.length === 0 ? (
                   <div className="backdrop-blur-xl bg-slate-900/40 border border-cyan-400/20 rounded-xl p-8 text-center">
-                    <p className="text-cyan-300/70">No bookings for this date</p>
+                    <p className="text-cyan-300/50 text-sm">No bookings for this date</p>
                   </div>
                 ) : (
-                  bookings.map((booking) => {
-                    const sh = bookingStartHour(booking);
+                  bookings.map(booking => {
+                    const bStart = bookingStart(booking), bEnd = bookingEnd(booking);
                     return (
-                      <div
-                        key={booking.id}
-                        className="backdrop-blur-xl bg-slate-900/40 border border-cyan-400/20 rounded-xl p-6 hover:border-cyan-400/40 transition-all"
-                      >
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
-                          <div>
-                            <p className="text-cyan-300/70 text-sm">Guest</p>
-                            <p className="text-white font-bold">{booking.customerName}</p>
-                          </div>
-                          <div>
-                            <p className="text-cyan-300/70 text-sm">Time</p>
-                            <p className="text-white font-bold">
-                              {fmtHour(sh)} – {fmtHour(sh + booking.hours)}
-                              <span className="text-cyan-300/60 font-normal ml-1">({booking.hours}h)</span>
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-cyan-300/70 text-sm">Amount</p>
-                            <p className="text-magenta-300 font-bold">
-                              ₹{booking.totalAmount}
-                              {(booking.amountDue ?? 0) > 0 && (
-                                <span className="text-yellow-400 text-xs ml-1">(due ₹{booking.amountDue})</span>
-                              )}
-                            </p>
-                          </div>
-                          <div>
-                            <p className="text-cyan-300/70 text-sm">Status</p>
-                            <p className={`font-bold text-sm ${
-                              booking.status === 'confirmed' ? 'text-green-400' :
-                              booking.status === 'checked_in' ? 'text-cyan-300' :
-                              booking.status === 'completed' ? 'text-cyan-400' :
-                              'text-yellow-400'
-                            }`}>
+                      <div key={booking.id}
+                        className={`backdrop-blur-xl bg-slate-900/40 border rounded-xl p-5 hover:border-cyan-400/40 transition-all cursor-pointer ${selectedBooking?.id === booking.id ? 'border-violet-400/50' : 'border-cyan-400/20'}`}
+                        onClick={() => setSelectedBooking(selectedBooking?.id === booking.id ? null : booking)}>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                          <div><p className="text-slate-400 text-xs">Guest</p><p className="text-white font-bold">{booking.customerName}</p></div>
+                          <div><p className="text-slate-400 text-xs">Time</p>
+                            <p className="text-white font-bold">{minutesToTime(bStart)} – {minutesToTime(bEnd)}<span className="text-slate-500 font-normal ml-1">({fmtDuration(bookingDuration(booking))})</span></p></div>
+                          <div><p className="text-slate-400 text-xs">Amount</p>
+                            <p className="text-pink-300 font-bold">₹{booking.totalAmount}
+                              {(booking.balanceDue ?? booking.amountDue ?? 0) > 0 && <span className="text-yellow-400 text-xs ml-1">(due ₹{booking.balanceDue ?? booking.amountDue})</span>}
+                            </p></div>
+                          <div><p className="text-slate-400 text-xs">Status</p>
+                            <p className={`font-bold text-sm ${booking.status === 'confirmed' ? 'text-green-400' : booking.status === 'checked_in' ? 'text-blue-400' : booking.status === 'completed' ? 'text-cyan-400' : 'text-yellow-400'}`}>
                               {booking.status.toUpperCase()}
-                            </p>
-                          </div>
-                        </div>
-
-                        <div className="flex flex-wrap gap-2">
-                          {booking.status === 'confirmed' && (
-                            <button
-                              onClick={() => handleCheckIn(booking.id)}
-                              className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-400 hover:to-emerald-400 text-white px-4 py-2 rounded-lg font-bold text-sm"
-                            >
-                              ✅ Check In
-                            </button>
-                          )}
-                          {booking.status === 'checked_in' && (
-                            <button
-                              onClick={() => handleCheckOut(booking.id)}
-                              className="bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-400 hover:to-cyan-400 text-white px-4 py-2 rounded-lg font-bold text-sm"
-                            >
-                              🏁 Check Out
-                            </button>
-                          )}
-                          {['confirmed', 'checked_in', 'pending_full_payment'].includes(booking.status) && (
-                            <>
-                              <button
-                                onClick={() => openEdit(booking)}
-                                className="bg-gradient-to-r from-violet-500 to-purple-500 hover:from-violet-400 hover:to-purple-400 text-white px-4 py-2 rounded-lg font-bold text-sm"
-                              >
-                                ✏️ Edit
-                              </button>
-                              <button
-                                onClick={() => handleCancel(booking.id)}
-                                className="bg-gradient-to-r from-pink-500 to-red-500 hover:from-pink-400 hover:to-red-400 text-white px-4 py-2 rounded-lg font-bold text-sm"
-                              >
-                                ❌ Cancel
-                              </button>
-                            </>
-                          )}
-                        </div>
-
-                        <div className="mt-4 pt-4 border-t border-slate-700/50 text-xs text-cyan-300/60 space-y-1">
-                          <p>📧 {booking.customerEmail || '—'}</p>
-                          <p>📱 {booking.customerPhone}</p>
-                          {booking.notes && <p>📝 {booking.notes}</p>}
+                            </p></div>
                         </div>
                       </div>
                     );
@@ -576,406 +558,180 @@ export default function AdminDashboard() {
           </>
         )}
 
-        {/* ── Analytics Tab ── */}
+        {/* ── ANALYTICS TAB ── */}
         {activeTab === 'analytics' && (
           <div className="space-y-6">
-            {/* Period selector */}
             <div className="flex gap-2">
-              {(['today', 'week', 'month'] as AnalyticsPeriod[]).map((p) => (
-                <button
-                  key={p}
-                  onClick={() => setAnalyticsPeriod(p)}
-                  className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${
-                    analyticsPeriod === p
-                      ? 'bg-cyan-500/30 border border-cyan-400/60 text-cyan-300'
-                      : 'bg-slate-800/40 border border-slate-600/60 text-slate-400 hover:border-slate-500'
-                  }`}
-                >
+              {(['today','week','month'] as AnalyticsPeriod[]).map(p => (
+                <button key={p} onClick={() => setAnalyticsPeriod(p)}
+                  className={`px-4 py-1.5 rounded-lg text-sm font-bold transition-all ${analyticsPeriod === p ? 'bg-cyan-500/30 border border-cyan-400/60 text-cyan-300' : 'bg-slate-800/40 border border-slate-600/60 text-slate-400 hover:border-slate-500'}`}>
                   {PERIOD_LABELS[p]}
                 </button>
               ))}
             </div>
-
             {analyticsLoading ? (
-              <div className="text-center text-cyan-300 py-16">Loading analytics...</div>
+              <div className="text-center text-cyan-300 py-16 text-sm">Loading analytics…</div>
             ) : analytics ? (
               <>
-                {/* Stat cards */}
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-                  <StatCard
-                    label="Total Revenue"
-                    value={`₹${analytics.totalRevenue.toLocaleString('en-IN')}`}
-                    color="cyan"
-                  />
-                  <StatCard
-                    label="Bookings"
-                    value={String(analytics.bookingsCount)}
-                    color="magenta"
-                  />
-                  <StatCard
-                    label="Pending Payments"
-                    value={`₹${analytics.pendingPayments.toLocaleString('en-IN')}`}
-                    color="yellow"
-                  />
-                  <StatCard
-                    label="No-shows"
-                    value={String(analytics.noShows)}
-                    color="red"
-                  />
-                  <StatCard
-                    label="Cancellations"
-                    value={String(analytics.cancellations)}
-                    color="orange"
-                  />
+                  {[
+                    { label: 'Total Revenue', value: `₹${analytics.totalRevenue.toLocaleString('en-IN')}`, color: 'cyan' as const },
+                    { label: 'Bookings', value: String(analytics.bookingsCount), color: 'magenta' as const },
+                    { label: 'Pending Payments', value: `₹${analytics.pendingPayments.toLocaleString('en-IN')}`, color: 'yellow' as const },
+                    { label: 'No-shows', value: String(analytics.noShows), color: 'red' as const },
+                    { label: 'Cancellations', value: String(analytics.cancellations), color: 'orange' as const },
+                  ].map(c => <StatCard key={c.label} {...c} />)}
                 </div>
-
-                {/* Revenue chart */}
                 {analytics.dailyData.length > 0 && mounted && (
                   <div className="backdrop-blur-xl bg-slate-900/40 border border-cyan-400/20 rounded-xl p-6">
-                    <h3 className="text-cyan-300 font-bold mb-4 text-sm uppercase tracking-wider">
-                      Revenue by Day
-                    </h3>
+                    <h3 className="text-cyan-300 font-bold mb-4 text-sm uppercase tracking-wider">Revenue by Day</h3>
                     <ResponsiveContainer width="100%" height={220}>
                       <BarChart data={analytics.dailyData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                        <defs>
-                          <linearGradient id="revenueGrad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#22d3ee" stopOpacity={0.9} />
-                            <stop offset="100%" stopColor="#a855f7" stopOpacity={0.5} />
-                          </linearGradient>
-                        </defs>
+                        <defs><linearGradient id="rg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#22d3ee" stopOpacity={0.9} /><stop offset="100%" stopColor="#a855f7" stopOpacity={0.5} /></linearGradient></defs>
                         <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                        <XAxis
-                          dataKey="date"
-                          stroke="#67e8f9"
-                          tick={{ fontSize: 11, fill: '#67e8f9' }}
-                          tickFormatter={fmtDate}
-                        />
-                        <YAxis
-                          stroke="#67e8f9"
-                          tick={{ fontSize: 11, fill: '#67e8f9' }}
-                          tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`}
-                          width={45}
-                        />
-                        <Tooltip
-                          contentStyle={{
-                            background: '#0f172a',
-                            border: '1px solid rgba(34,211,238,0.3)',
-                            borderRadius: 8,
-                            fontSize: 12,
-                          }}
-                          labelStyle={{ color: '#67e8f9' }}
-                          labelFormatter={fmtDate as any}
-                          formatter={((v: number) => [`₹${v.toLocaleString('en-IN')}`, 'Revenue']) as any}
-                        />
-                        <Bar dataKey="revenue" fill="url(#revenueGrad)" radius={[4, 4, 0, 0]} />
+                        <XAxis dataKey="date" stroke="#67e8f9" tick={{ fontSize: 11, fill: '#67e8f9' }} tickFormatter={fmtDate} />
+                        <YAxis stroke="#67e8f9" tick={{ fontSize: 11, fill: '#67e8f9' }} tickFormatter={v => `₹${(v / 1000).toFixed(0)}k`} width={45} />
+                        <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid rgba(34,211,238,0.3)', borderRadius: 8, fontSize: 12 }}
+                          labelStyle={{ color: '#67e8f9' }} labelFormatter={fmtDate as any}
+                          formatter={((v: number) => [`₹${v.toLocaleString('en-IN')}`, 'Revenue']) as any} />
+                        <Bar dataKey="revenue" fill="url(#rg)" radius={[4, 4, 0, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
-                  </div>
-                )}
-
-                {/* Bookings count chart */}
-                {analytics.dailyData.length > 1 && mounted && (
-                  <div className="backdrop-blur-xl bg-slate-900/40 border border-cyan-400/20 rounded-xl p-6">
-                    <h3 className="text-cyan-300 font-bold mb-4 text-sm uppercase tracking-wider">
-                      Bookings by Day
-                    </h3>
-                    <ResponsiveContainer width="100%" height={180}>
-                      <BarChart data={analytics.dailyData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                        <defs>
-                          <linearGradient id="countGrad" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#f472b6" stopOpacity={0.9} />
-                            <stop offset="100%" stopColor="#7c3aed" stopOpacity={0.5} />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                        <XAxis
-                          dataKey="date"
-                          stroke="#f472b6"
-                          tick={{ fontSize: 11, fill: '#f472b6' }}
-                          tickFormatter={fmtDate}
-                        />
-                        <YAxis
-                          stroke="#f472b6"
-                          tick={{ fontSize: 11, fill: '#f472b6' }}
-                          allowDecimals={false}
-                          width={30}
-                        />
-                        <Tooltip
-                          contentStyle={{
-                            background: '#0f172a',
-                            border: '1px solid rgba(244,114,182,0.3)',
-                            borderRadius: 8,
-                            fontSize: 12,
-                          }}
-                          labelStyle={{ color: '#f472b6' }}
-                          labelFormatter={fmtDate as any}
-                          formatter={((v: number) => [v, 'Bookings']) as any}
-                        />
-                        <Bar dataKey="count" fill="url(#countGrad)" radius={[4, 4, 0, 0]} />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                )}
-
-                {analytics.dailyData.length === 0 && (
-                  <div className="backdrop-blur-xl bg-slate-900/40 border border-cyan-400/20 rounded-xl p-8 text-center">
-                    <p className="text-cyan-300/60">No bookings found for this period.</p>
                   </div>
                 )}
               </>
             ) : null}
           </div>
         )}
+
+        {/* ── BLACKOUT TAB ── */}
+        {activeTab === 'blackout' && (
+          <div className="space-y-6">
+            <div className="backdrop-blur-xl bg-slate-900/40 border border-pink-400/20 rounded-xl p-6 space-y-4">
+              <h3 className="text-pink-300 font-black text-lg">Block Date(s)</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div><label className={LABEL_CLS}>From *</label>
+                  <input type="date" value={blackoutForm.startDate}
+                    onChange={e => setBlackoutForm(p => ({ ...p, startDate: e.target.value, endDate: p.endDate || e.target.value }))}
+                    className={INPUT_CLS} /></div>
+                <div><label className={LABEL_CLS}>To (same for single date)</label>
+                  <input type="date" value={blackoutForm.endDate} min={blackoutForm.startDate}
+                    onChange={e => setBlackoutForm(p => ({ ...p, endDate: e.target.value }))}
+                    className={INPUT_CLS} /></div>
+              </div>
+              <div><label className={LABEL_CLS}>Reason</label>
+                <input type="text" placeholder="e.g. Maintenance, Holiday…" value={blackoutForm.reason}
+                  onChange={e => setBlackoutForm(p => ({ ...p, reason: e.target.value }))} className={INPUT_CLS} /></div>
+              {blackoutError && <p className="text-pink-400 text-sm">{blackoutError}</p>}
+              <button onClick={handleBlockDates} disabled={blackoutSubmitting || !blackoutForm.startDate}
+                className="bg-gradient-to-r from-pink-500 to-red-500 hover:from-pink-400 hover:to-red-400 disabled:opacity-50 text-white font-black px-6 py-2 rounded-lg text-sm">
+                {blackoutSubmitting ? 'Blocking…' : '🚫 Block Date(s)'}
+              </button>
+            </div>
+            <div className="space-y-3">
+              <h3 className="text-cyan-300/60 text-xs uppercase tracking-wider font-bold">Active Blackout Dates ({blackoutDates.length})</h3>
+              {blackoutLoading ? <p className="text-cyan-300/50 text-sm">Loading…</p> :
+                blackoutDates.length === 0 ? (
+                  <div className="backdrop-blur-xl bg-slate-900/40 border border-cyan-400/20 rounded-xl p-6 text-center">
+                    <p className="text-cyan-300/40 text-sm">No blackout dates set.</p>
+                  </div>
+                ) : blackoutDates.map(bd => (
+                  <div key={bd.id} className="backdrop-blur-xl bg-slate-900/40 border border-pink-400/20 rounded-xl px-5 py-4 flex items-center justify-between gap-4">
+                    <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+                      <span className="text-white font-bold">{new Date(bd.date + 'T12:00').toLocaleDateString('en-IN', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' })}</span>
+                      <span className="text-pink-300">{bd.reason}</span>
+                      <span className="text-slate-400 text-xs self-center">by {bd.createdBy ?? 'admin'}</span>
+                    </div>
+                    <button onClick={() => handleUnblockDate(bd.date)}
+                      className="shrink-0 bg-slate-800/60 border border-slate-600 hover:border-green-500/60 hover:text-green-400 text-slate-300 text-xs font-bold px-3 py-1.5 rounded-lg transition-all">
+                      ✓ Unblock
+                    </button>
+                  </div>
+                ))}
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* ── Blackout Dates Tab ── */}
-      {activeTab === 'blackout' && (
-        <div className="space-y-6">
-          {/* Block form */}
-          <div className="backdrop-blur-xl bg-slate-900/40 border border-pink-400/20 rounded-xl p-6 space-y-4">
-            <h3 className="text-pink-300 font-black text-lg">Block Date(s)</h3>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className={LABEL_CLS}>From *</label>
-                <input
-                  type="date"
-                  value={blackoutForm.startDate}
-                  onChange={(e) => setBlackoutForm((p) => ({ ...p, startDate: e.target.value, endDate: p.endDate || e.target.value }))}
-                  className={INPUT_CLS}
-                />
-              </div>
-              <div>
-                <label className={LABEL_CLS}>To (leave same for single date)</label>
-                <input
-                  type="date"
-                  value={blackoutForm.endDate}
-                  min={blackoutForm.startDate}
-                  onChange={(e) => setBlackoutForm((p) => ({ ...p, endDate: e.target.value }))}
-                  className={INPUT_CLS}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className={LABEL_CLS}>Reason</label>
-              <input
-                type="text"
-                placeholder="e.g. Maintenance, Holiday, Private Event…"
-                value={blackoutForm.reason}
-                onChange={(e) => setBlackoutForm((p) => ({ ...p, reason: e.target.value }))}
-                className={INPUT_CLS}
-              />
-            </div>
-
-            {blackoutError && (
-              <p className="text-pink-400 text-sm">{blackoutError}</p>
-            )}
-
-            <button
-              onClick={handleBlockDates}
-              disabled={blackoutSubmitting || !blackoutForm.startDate}
-              className="bg-gradient-to-r from-pink-500 to-red-500 hover:from-pink-400 hover:to-red-400 disabled:opacity-50 text-white font-black px-6 py-2 rounded-lg shadow-lg shadow-pink-500/30 text-sm"
-            >
-              {blackoutSubmitting ? 'Blocking…' : '🚫 Block Date(s)'}
-            </button>
-          </div>
-
-          {/* Active blackout dates list */}
-          <div className="space-y-3">
-            <h3 className="text-cyan-300/70 text-sm uppercase tracking-wider font-bold">
-              Active Blackout Dates ({blackoutDates.length})
-            </h3>
-
-            {blackoutLoading ? (
-              <p className="text-cyan-300/60 text-sm">Loading...</p>
-            ) : blackoutDates.length === 0 ? (
-              <div className="backdrop-blur-xl bg-slate-900/40 border border-cyan-400/20 rounded-xl p-6 text-center">
-                <p className="text-cyan-300/50 text-sm">No blackout dates set.</p>
-              </div>
-            ) : (
-              blackoutDates.map((bd) => (
-                <div
-                  key={bd.id}
-                  className="backdrop-blur-xl bg-slate-900/40 border border-pink-400/20 rounded-xl px-5 py-4 flex items-center justify-between gap-4"
-                >
-                  <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
-                    <span className="text-white font-bold">
-                      {new Date(bd.date + 'T12:00').toLocaleDateString('en-IN', {
-                        weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
-                      })}
-                    </span>
-                    <span className="text-pink-300">{bd.reason}</span>
-                    <span className="text-slate-400 text-xs self-center">by {bd.createdBy ?? 'admin'}</span>
-                  </div>
-                  <button
-                    onClick={() => handleUnblockDate(bd.date)}
-                    className="shrink-0 bg-slate-800/60 border border-slate-600 hover:border-green-500/60 hover:text-green-400 text-slate-300 text-xs font-bold px-3 py-1.5 rounded-lg transition-all"
-                  >
-                    ✓ Unblock
-                  </button>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ── Offline Booking Modal ── */}
+      {/* ── OFFLINE BOOKING MODAL ── */}
       {showModal && (
-        <div
-          className="fixed inset-0 z-50 overflow-y-auto flex items-start justify-center bg-slate-950/80 backdrop-blur-sm py-8 px-4"
-          onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}
-        >
+        <div className="fixed inset-0 z-50 overflow-y-auto flex items-start justify-center bg-slate-950/80 backdrop-blur-sm py-8 px-4"
+          onClick={e => { if (e.target === e.currentTarget) closeModal(); }}>
           <div className="w-full max-w-lg backdrop-blur-xl bg-slate-900/95 border border-cyan-400/30 rounded-2xl p-6 shadow-2xl shadow-cyan-400/20">
-            <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center justify-between mb-5">
               <h2 className="text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-violet-300">
                 {editingBooking ? '✏️ Edit Booking' : '+ Offline Booking'}
               </h2>
-              <button
-                onClick={closeModal}
-                className="text-cyan-300/60 hover:text-cyan-300 text-xl leading-none"
-              >
-                ✕
-              </button>
+              <button onClick={closeModal} className="text-slate-400 hover:text-white text-xl leading-none">✕</button>
             </div>
 
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className={LABEL_CLS}>Guest Name *</label>
-                  <input
-                    type="text"
-                    placeholder="Full name"
-                    value={form.customerName}
-                    onChange={(e) => setField('customerName', e.target.value)}
-                    className={INPUT_CLS}
-                  />
-                </div>
-                <div>
-                  <label className={LABEL_CLS}>Phone *</label>
-                  <input
-                    type="tel"
-                    placeholder="10-digit number"
-                    value={form.customerPhone}
-                    onChange={(e) => setField('customerPhone', e.target.value)}
-                    className={INPUT_CLS}
-                  />
-                </div>
+                <div><label className={LABEL_CLS}>Guest Name *</label>
+                  <input type="text" placeholder="Full name" value={form.customerName}
+                    onChange={e => setField('customerName', e.target.value)} className={INPUT_CLS} /></div>
+                <div><label className={LABEL_CLS}>Phone *</label>
+                  <input type="tel" placeholder="10-digit" value={form.customerPhone}
+                    onChange={e => setField('customerPhone', e.target.value)} className={INPUT_CLS} /></div>
               </div>
 
-              <div>
-                <label className={LABEL_CLS}>Email</label>
-                <input
-                  type="email"
-                  placeholder="guest@example.com"
-                  value={form.customerEmail}
-                  onChange={(e) => setField('customerEmail', e.target.value)}
-                  className={INPUT_CLS}
-                />
-              </div>
+              <div><label className={LABEL_CLS}>Email</label>
+                <input type="email" placeholder="guest@example.com" value={form.customerEmail}
+                  onChange={e => setField('customerEmail', e.target.value)} className={INPUT_CLS} /></div>
 
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className={LABEL_CLS}>Date *</label>
-                  <input
-                    type="date"
-                    value={form.date}
-                    onChange={(e) => setField('date', e.target.value)}
-                    className={INPUT_CLS}
-                  />
-                </div>
-                <div>
-                  <label className={LABEL_CLS}>Start Hour *</label>
-                  <select
-                    value={form.startHour}
-                    onChange={(e) => {
-                      const sh = Number(e.target.value);
-                      const safeH = Math.min(form.hours, HOURS_END - sh);
-                      setForm((p) => ({
-                        ...p,
-                        startHour: sh,
-                        hours: safeH,
-                        ...(!editingBooking ? { amountPaid: HOURLY_RATE * safeH } : {}),
-                      }));
+                <div><label className={LABEL_CLS}>Date *</label>
+                  <input type="date" value={form.date} onChange={e => setField('date', e.target.value)} className={INPUT_CLS} /></div>
+                <div><label className={LABEL_CLS}>Start Time *</label>
+                  <select value={form.startTime}
+                    onChange={e => {
+                      const st = Number(e.target.value);
+                      const maxDur = Math.min(480, ADMIN_END - st);
+                      const safeDur = Math.min(form.duration, maxDur);
+                      setForm(p => ({ ...p, startTime: st, duration: safeDur, ...(!editingBooking ? { amountPaid: Math.ceil(safeDur / 60) * HOURLY_RATE } : {}) }));
                     }}
-                    className={INPUT_CLS}
-                  >
-                    {HOUR_OPTS.map((h) => (
-                      <option key={h} value={h}>{fmtHour(h)}</option>
-                    ))}
+                    className={INPUT_CLS}>
+                    {TIME_OPTS.map(m => <option key={m} value={m}>{minutesToTime(m)}</option>)}
                   </select>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className={LABEL_CLS}>Duration (hours) *</label>
-                  <select
-                    value={form.hours}
-                    onChange={(e) => {
-                      const h = Number(e.target.value);
-                      setForm((p) => ({
-                        ...p,
-                        hours: h,
-                        ...(!editingBooking ? { amountPaid: HOURLY_RATE * h } : {}),
-                      }));
+                <div><label className={LABEL_CLS}>Duration *</label>
+                  <select value={form.duration}
+                    onChange={e => {
+                      const dur = Number(e.target.value);
+                      setForm(p => ({ ...p, duration: dur, ...(!editingBooking ? { amountPaid: Math.ceil(dur / 60) * HOURLY_RATE } : {}) }));
                     }}
-                    className={INPUT_CLS}
-                  >
-                    {Array.from({ length: maxHours }, (_, i) => i + 1).map((h) => (
-                      <option key={h} value={h}>{h} hour{h > 1 ? 's' : ''}</option>
+                    className={INPUT_CLS}>
+                    {DURATION_OPTS.filter(o => form.startTime + o.value <= ADMIN_END).map(o => (
+                      <option key={o.value} value={o.value}>{o.label} — ₹{(Math.ceil(o.value / 60) * HOURLY_RATE).toLocaleString()}</option>
                     ))}
                   </select>
                 </div>
                 <div>
-                  <label className={LABEL_CLS}>
-                    Amount Paid (₹)
-                    <span className="text-cyan-300/40 ml-1">expected ₹{expectedTotal}</span>
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    step={100}
-                    value={form.amountPaid}
-                    onChange={(e) => setField('amountPaid', Number(e.target.value))}
-                    className={INPUT_CLS}
-                  />
+                  <label className={LABEL_CLS}>Amount Paid <span className="text-cyan-300/30 ml-1">exp ₹{expectedTotal}</span></label>
+                  <input type="number" min={0} step={100} value={form.amountPaid}
+                    onChange={e => setField('amountPaid', Number(e.target.value))} className={INPUT_CLS} />
                 </div>
               </div>
 
-              <div>
-                <label className={LABEL_CLS}>Notes</label>
-                <input
-                  type="text"
-                  placeholder="Any special requests…"
-                  value={form.notes}
-                  onChange={(e) => setField('notes', e.target.value)}
-                  className={INPUT_CLS}
-                />
-              </div>
+              <div><label className={LABEL_CLS}>Notes</label>
+                <input type="text" placeholder="Any special requests…" value={form.notes}
+                  onChange={e => setField('notes', e.target.value)} className={INPUT_CLS} /></div>
 
               {conflict && (
-                <div className="p-3 bg-yellow-500/15 border border-yellow-400/40 rounded-lg text-yellow-300 text-sm">
-                  ⚠️ {conflict}
-                </div>
+                <div className="p-3 bg-yellow-500/15 border border-yellow-400/40 rounded-lg text-yellow-300 text-sm">⚠️ {conflict}</div>
               )}
-
               {formError && (
-                <div className="p-3 bg-pink-500/15 border border-pink-400/40 rounded-lg text-pink-300 text-sm">
-                  {formError}
-                </div>
+                <div className="p-3 bg-pink-500/15 border border-pink-400/40 rounded-lg text-pink-300 text-sm">{formError}</div>
               )}
 
               {form.date && (
-                <div className="p-3 bg-slate-800/40 rounded-lg text-xs text-cyan-300/70 space-y-1">
-                  <p>
-                    📅 {form.date} &nbsp;·&nbsp;
-                    ⏱ {fmtHour(form.startHour)} – {fmtHour(form.startHour + form.hours)} ({form.hours}h)
-                  </p>
-                  <p>
-                    💰 Total ₹{expectedTotal} &nbsp;·&nbsp; Paid ₹{form.amountPaid} &nbsp;·&nbsp;
-                    <span className={expectedTotal - form.amountPaid > 0 ? 'text-yellow-400' : 'text-green-400'}>
+                <div className="p-3 bg-slate-800/40 rounded-lg text-xs text-cyan-300/60 space-y-1">
+                  <p>📅 {form.date} · ⏱ {minutesToTime(form.startTime)} – {minutesToTime(form.startTime + form.duration)} ({fmtDuration(form.duration)})</p>
+                  <p>💰 Total ₹{expectedTotal} · Paid ₹{form.amountPaid} ·
+                    <span className={expectedTotal - form.amountPaid > 0 ? 'text-yellow-400 ml-1' : 'text-green-400 ml-1'}>
                       Due ₹{Math.max(0, expectedTotal - form.amountPaid)}
                     </span>
                   </p>
@@ -983,22 +739,10 @@ export default function AdminDashboard() {
               )}
 
               <div className="flex gap-3 pt-1">
-                <button
-                  onClick={closeModal}
-                  className="flex-1 py-2 bg-slate-800/60 border border-slate-600 text-cyan-300 rounded-lg hover:border-slate-500 text-sm"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSubmit}
-                  disabled={formLoading || !!conflict}
-                  className="flex-1 py-2 bg-gradient-to-r from-cyan-500 to-violet-500 hover:from-cyan-400 hover:to-violet-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-lg text-sm shadow-lg shadow-cyan-500/30"
-                >
-                  {formLoading
-                    ? 'Saving…'
-                    : editingBooking
-                    ? 'Save Changes'
-                    : 'Create Booking'}
+                <button onClick={closeModal} className="flex-1 py-2 bg-slate-800/60 border border-slate-600 text-cyan-300 rounded-lg hover:border-slate-500 text-sm">Cancel</button>
+                <button onClick={handleSubmit} disabled={formLoading || !!conflict}
+                  className="flex-1 py-2 bg-gradient-to-r from-cyan-500 to-violet-500 hover:from-cyan-400 hover:to-violet-400 disabled:opacity-50 text-white font-bold rounded-lg text-sm shadow-lg shadow-cyan-500/30">
+                  {formLoading ? 'Saving…' : editingBooking ? 'Save Changes' : 'Create Booking'}
                 </button>
               </div>
             </div>
@@ -1010,11 +754,11 @@ export default function AdminDashboard() {
 }
 
 const COLOR_MAP = {
-  cyan:    { border: 'border-cyan-400/30',   text: 'from-cyan-300 to-cyan-100' },
+  cyan:    { border: 'border-cyan-400/30',    text: 'from-cyan-300 to-cyan-100' },
   magenta: { border: 'border-fuchsia-400/30', text: 'from-fuchsia-300 to-pink-200' },
-  yellow:  { border: 'border-yellow-400/30', text: 'from-yellow-300 to-amber-200' },
-  red:     { border: 'border-red-400/30',    text: 'from-red-300 to-rose-200' },
-  orange:  { border: 'border-orange-400/30', text: 'from-orange-300 to-amber-200' },
+  yellow:  { border: 'border-yellow-400/30',  text: 'from-yellow-300 to-amber-200' },
+  red:     { border: 'border-red-400/30',     text: 'from-red-300 to-rose-200' },
+  orange:  { border: 'border-orange-400/30',  text: 'from-orange-300 to-amber-200' },
 };
 
 function StatCard({ label, value, color }: { label: string; value: string; color: keyof typeof COLOR_MAP }) {
@@ -1022,9 +766,7 @@ function StatCard({ label, value, color }: { label: string; value: string; color
   return (
     <div className={`backdrop-blur-xl bg-slate-900/40 border ${c.border} rounded-xl p-5`}>
       <p className="text-slate-400 text-xs uppercase tracking-wider mb-2">{label}</p>
-      <p className={`text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r ${c.text}`}>
-        {value}
-      </p>
+      <p className={`text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r ${c.text}`}>{value}</p>
     </div>
   );
 }

@@ -1,26 +1,35 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { initializeSlotsForDate, areHoursAvailable, isBlackoutDate, getOperatingHours } from '@/lib/utils/availability';
+import { isTimeRangeAvailable, isBlackoutDate, getOperatingHours } from '@/lib/utils/availability';
 import { createRazorpayOrder } from '@/lib/payment/razorpay';
 import { adminDb } from '@/lib/firebase/admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { ApiResponse } from '@/lib/types';
 
-const DEPOSIT_AMOUNT = parseInt(process.env.DEPOSIT_AMOUNT || '500');
+const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '50');
+const DEPOSIT_AMOUNT = parseInt(process.env.DEPOSIT_AMOUNT || '50');
+const MIN_DURATION = 30;   // minutes
+const MAX_DURATION = 480;  // minutes (8 hours)
 
 /**
  * POST /api/bookings/initiate
- * Validates the request, does an optimistic availability check, then creates a
- * Razorpay order. No Firestore booking doc is written here — slots are locked
- * atomically in POST /api/bookings/confirm after payment succeeds.
+ * Validates request, does an optimistic time-range availability check, then creates a Razorpay order.
+ * No booking doc is written here — the booking is committed atomically in /confirm after payment.
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { date, startHour, hours, customerName, customerEmail, customerPhone } = body;
+    const { date, startTime, duration, customerName, customerEmail, customerPhone, paymentType } = body;
 
-    if (!date || startHour === undefined || !hours || !customerName || !customerEmail || !customerPhone) {
+    if (!date || startTime === undefined || !duration || !customerName || !customerEmail || !customerPhone) {
       return NextResponse.json(
-        { success: false, error: 'Missing required fields' } as ApiResponse<null>,
+        { success: false, error: 'Missing required fields: date, startTime, duration, customerName, customerEmail, customerPhone' } as ApiResponse<null>,
+        { status: 400 }
+      );
+    }
+
+    if (paymentType !== 'full' && paymentType !== 'deposit') {
+      return NextResponse.json(
+        { success: false, error: 'paymentType must be "full" or "deposit"' } as ApiResponse<null>,
         { status: 400 }
       );
     }
@@ -39,9 +48,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (hours < 1 || hours > 8) {
+    if (typeof startTime !== 'number' || startTime % 5 !== 0 || startTime < 0) {
       return NextResponse.json(
-        { success: false, error: 'Booking must be between 1 and 8 hours' } as ApiResponse<null>,
+        { success: false, error: 'startTime must be a non-negative multiple of 5 (minutes from midnight)' } as ApiResponse<null>,
+        { status: 400 }
+      );
+    }
+
+    if (typeof duration !== 'number' || duration % 5 !== 0 || duration < MIN_DURATION || duration > MAX_DURATION) {
+      return NextResponse.json(
+        { success: false, error: `duration must be a multiple of 5, between ${MIN_DURATION} and ${MAX_DURATION} minutes` } as ApiResponse<null>,
         { status: 400 }
       );
     }
@@ -53,40 +69,38 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate requested hours fall within operating hours
     const operatingHours = await getOperatingHours(date);
-    if (startHour < operatingHours.open || (startHour + hours) > operatingHours.close) {
+    const openMinute = operatingHours.open * 60;
+    const closeMinute = operatingHours.close * 60;
+    if (startTime < openMinute || (startTime + duration) > closeMinute) {
       return NextResponse.json(
-        { success: false, error: 'Requested hours are outside operating hours' } as ApiResponse<null>,
+        { success: false, error: 'Requested time is outside operating hours' } as ApiResponse<null>,
         { status: 400 }
       );
     }
 
-    // Ensure slot docs exist, then do an optimistic availability check.
-    // This is not the authoritative lock — that happens in /confirm.
-    try { await initializeSlotsForDate(date); } catch {}
-
-    const available = await areHoursAvailable(date, startHour, hours);
+    const available = await isTimeRangeAvailable(date, startTime, duration);
     if (!available) {
       return NextResponse.json(
-        { success: false, error: 'One or more requested time slots are already booked' } as ApiResponse<null>,
+        { success: false, error: 'The selected time range is already booked' } as ApiResponse<null>,
         { status: 409 }
       );
     }
 
-    // Generate a booking ID that will be used as the Firestore doc key at confirm time.
     const bookingId = adminDb.collection('bookings').doc().id;
+    const totalAmount = Math.ceil(duration / 60) * HOURLY_RATE;
+    const razorpayAmount = paymentType === 'full' ? totalAmount * 100 : DEPOSIT_AMOUNT * 100;
 
     const razorpayOrder = await createRazorpayOrder(
-      DEPOSIT_AMOUNT * 100,
+      razorpayAmount,
       bookingId,
       customerEmail,
       customerPhone
     );
 
-    // Store order→booking mapping so /confirm can verify the payment belongs to this booking
     await adminDb.doc(`razorpayOrders/${razorpayOrder.id}`).set({
       bookingId,
+      paymentType,
       createdAt: FieldValue.serverTimestamp(),
     });
 
@@ -96,6 +110,8 @@ export async function POST(request: NextRequest) {
         message: 'Order created. Proceed to payment.',
         data: {
           bookingId,
+          paymentType,
+          totalAmount,
           razorpayOrder: {
             id: razorpayOrder.id,
             amount: razorpayOrder.amount,

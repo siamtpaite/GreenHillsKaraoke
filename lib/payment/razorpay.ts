@@ -111,10 +111,7 @@ export async function refundPayment(
 ): Promise<any> {
   try {
     const razorpay = getRazorpayClient();
-    const refundOptions: any = {
-      payment_id: paymentId,
-    };
-
+    const refundOptions: any = {};
     if (amount) {
       refundOptions.amount = amount; // in paise
     }

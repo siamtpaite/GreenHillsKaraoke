@@ -1,15 +1,30 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { adminDb } from '../firebase/admin';
 import { Booking, BookingRequest } from '../types';
-import { generateHourList } from '../utils/availability';
 
-const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '1180');
-const DEPOSIT_AMOUNT = parseInt(process.env.DEPOSIT_AMOUNT || '500');
+const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '50');
+const DEPOSIT_AMOUNT = parseInt(process.env.DEPOSIT_AMOUNT || '50');
+
+function computePaymentAmounts(paymentType: 'full' | 'deposit', totalAmount: number) {
+  if (paymentType === 'full') return { paidAmount: totalAmount, balanceDue: 0 };
+  return { paidAmount: DEPOSIT_AMOUNT, balanceDue: totalAmount - DEPOSIT_AMOUNT };
+}
+
+// Resolve start/end from any booking doc format (new or legacy)
+function resolveRange(data: any): { start: number; end: number } {
+  const start =
+    data.startTime ??
+    data.startMinute ??
+    (data.startHour != null ? data.startHour * 60 : null) ??
+    720;
+  const duration = data.duration ?? (data.hours != null ? data.hours * 60 : 60);
+  return { start, end: data.endTime ?? start + duration };
+}
 
 /**
- * Atomically check slot availability, lock all slots, and create a confirmed booking.
+ * Atomically verify no time-range overlap exists, then create the confirmed booking doc.
+ * Throws an error prefixed 'SLOT_CONFLICT' if the range is taken.
  * Called only after Razorpay payment signature is verified.
- * Throws an error prefixed with 'SLOT_CONFLICT' if any slot is no longer available.
  */
 export async function lockAndConfirmBooking(
   bookingId: string,
@@ -17,44 +32,44 @@ export async function lockAndConfirmBooking(
   razorpayPaymentId: string,
   razorpayOrderId: string
 ): Promise<void> {
-  const hourList = generateHourList(req.startHour, req.hours);
-  const totalAmount = HOURLY_RATE * req.hours;
+  const endTime = req.startTime + req.duration;
+  const totalAmount = Math.ceil(req.duration / 60) * HOURLY_RATE;
 
-  await adminDb.runTransaction(async (transaction) => {
-    // 1. Read all slots and fail fast on any conflict
-    for (const hour of hourList) {
-      const slotRef = adminDb.doc(`availability/${req.date}/slots/${hour}`);
-      const slotSnap = await transaction.get(slotRef);
-      if (slotSnap.exists && slotSnap.data()?.status !== 'available') {
-        throw new Error(`SLOT_CONFLICT: ${req.date} ${hour}:00 is no longer available`);
+  await adminDb.runTransaction(async (tx) => {
+    // Read all active bookings for the date within the transaction
+    const existingSnap = await tx.get(
+      adminDb.collection('bookings')
+        .where('date', '==', req.date)
+        .where('status', 'in', ['confirmed', 'checked_in'])
+    );
+
+    for (const doc of existingSnap.docs) {
+      if (doc.id === bookingId) continue;
+      const { start: bStart, end: bEnd } = resolveRange(doc.data());
+      if (req.startTime < bEnd && endTime > bStart) {
+        throw new Error(
+          `SLOT_CONFLICT: ${req.date} ${req.startTime}–${endTime} overlaps booking ${doc.id}`
+        );
       }
     }
 
-    // 2. Lock all slots
-    for (const hour of hourList) {
-      const slotRef = adminDb.doc(`availability/${req.date}/slots/${hour}`);
-      transaction.set(slotRef, {
-        status: 'booked',
-        bookingId,
-        bookedAt: FieldValue.serverTimestamp(),
-        hour: parseInt(hour),
-      });
-    }
-
-    // 3. Create booking as confirmed — deposit already paid
+    const { paidAmount, balanceDue } = computePaymentAmounts(req.paymentType, totalAmount);
     const bookingRef = adminDb.doc(`bookings/${bookingId}`);
-    transaction.set(bookingRef, {
+    tx.set(bookingRef, {
       id: bookingId,
       customerName: req.customerName,
       customerEmail: req.customerEmail,
       customerPhone: req.customerPhone,
       date: req.date,
-      startHour: req.startHour,
-      hours: req.hours,
-      hourList,
-      depositPaid: DEPOSIT_AMOUNT,
+      startTime: req.startTime,
+      duration: req.duration,
+      endTime,
+      paymentType: req.paymentType,
       totalAmount,
-      amountDue: totalAmount - DEPOSIT_AMOUNT,
+      paidAmount,
+      balanceDue,
+      depositPaid: paidAmount,  // legacy alias
+      amountDue: balanceDue,    // legacy alias
       status: 'confirmed',
       razorpayPaymentId,
       razorpayOrderId,
@@ -63,47 +78,18 @@ export async function lockAndConfirmBooking(
   });
 }
 
-/**
- * Cancel a booking and release slots
- */
 export async function cancelBooking(bookingId: string): Promise<void> {
   const bookingRef = adminDb.doc(`bookings/${bookingId}`);
-  const bookingSnap = await bookingRef.get();
-
-  if (!bookingSnap.exists) {
-    throw new Error('Booking not found');
-  }
-
-  const booking = bookingSnap.data() as Booking;
-
-  await adminDb.runTransaction(async (transaction) => {
-    for (const hour of booking.hourList) {
-      const slotRef = adminDb.doc(`availability/${booking.date}/slots/${hour}`);
-      transaction.update(slotRef, {
-        status: 'available',
-        bookingId: null,
-        bookedAt: null,
-      });
-    }
-
-    transaction.update(bookingRef, {
-      status: 'cancelled',
-      cancelledAt: FieldValue.serverTimestamp(),
-    });
-  });
+  const snap = await bookingRef.get();
+  if (!snap.exists) throw new Error('Booking not found');
+  await bookingRef.update({ status: 'cancelled', cancelledAt: FieldValue.serverTimestamp() });
 }
 
-/**
- * Get booking by ID
- */
 export async function getBooking(bookingId: string): Promise<Booking | null> {
-  const bookingSnap = await adminDb.doc(`bookings/${bookingId}`).get();
-  return bookingSnap.exists ? (bookingSnap.data() as Booking) : null;
+  const snap = await adminDb.doc(`bookings/${bookingId}`).get();
+  return snap.exists ? (snap.data() as Booking) : null;
 }
 
-/**
- * Mark booking as completed (after customer checks out)
- */
 export async function completeBooking(bookingId: string): Promise<void> {
   await adminDb.doc(`bookings/${bookingId}`).update({
     status: 'completed',
@@ -111,9 +97,6 @@ export async function completeBooking(bookingId: string): Promise<void> {
   });
 }
 
-/**
- * Mark booking as no-show
- */
 export async function markAsNoShow(bookingId: string): Promise<void> {
   await adminDb.doc(`bookings/${bookingId}`).update({ status: 'no_show' });
 }

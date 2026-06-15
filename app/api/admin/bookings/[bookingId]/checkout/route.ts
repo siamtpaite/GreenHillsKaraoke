@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase/admin';
-import { sendWhatsAppNotification, formatCustomerJid } from '@/lib/whatsapp/baileys-send';
+import { sendWhatsAppMessage } from '@/lib/whatsapp/twilio-send';
+import { FieldValue } from 'firebase-admin/firestore';
 
 export async function POST(
   req: NextRequest,
@@ -8,26 +9,15 @@ export async function POST(
 ) {
   try {
     const { bookingId } = await params;
-    const now = new Date().toISOString();
 
     const bookingRef = adminDb.collection('bookings').doc(bookingId);
     const bookingSnap = await bookingRef.get();
 
     if (!bookingSnap.exists) {
-      return NextResponse.json(
-        { success: false, error: 'Booking not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ success: false, error: 'Booking not found' }, { status: 404 });
     }
 
-    const booking = bookingSnap.data();
-
-    if (!booking) {
-      return NextResponse.json(
-        { success: false, error: 'Booking not found' },
-        { status: 404 }
-      );
-    }
+    const booking = bookingSnap.data()!;
 
     if (booking.status !== 'checked_in') {
       return NextResponse.json(
@@ -38,30 +28,24 @@ export async function POST(
 
     await bookingRef.update({
       status: 'completed',
-      checkOutTime: now,
+      checkOutTime: FieldValue.serverTimestamp(),
     });
 
-    const waPayload = {
-      bookingId,
-      customerName: booking.customerName,
-      date: booking.date,
-      hours: booking.hours,
-      totalAmount: booking.totalAmount,
-    };
+    sendWhatsAppMessage({
+      to: booking.customerPhone,
+      message:
+        `✅ *Thanks for visiting Green Hills Karaoke!*\n\n` +
+        `Hi ${booking.customerName}, your session on ${booking.date} is complete.\n\n` +
+        `Hope you had an amazing time! 🎤\n` +
+        `See you again soon — Green Hills Karaoke`,
+    }).catch((e) => console.error('[Check-out] Customer WA failed:', e));
 
-    await sendWhatsAppNotification({ ...waPayload, eventType: 'checked_out' });
-
-    sendWhatsAppNotification(
-      { ...waPayload, eventType: 'customer_checked_out' },
-      formatCustomerJid(booking.customerPhone)
-    ).catch((err) => console.error('[Check-out] Customer WA failed:', err));
-
-    return NextResponse.json({ success: true, data: { status: 'completed', checkOutTime: now } });
+    return NextResponse.json({
+      success: true,
+      data: { status: 'completed' },
+    });
   } catch (error) {
     console.error('Check-out error:', error);
-    return NextResponse.json(
-      { success: false, error: 'Check-out failed' },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, error: 'Check-out failed' }, { status: 500 });
   }
 }

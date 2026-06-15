@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase/admin';
-import { sendWhatsAppNotification, formatCustomerJid } from '@/lib/whatsapp/baileys-send';
+import { sendAdminCancellationAlert, sendCustomerCancellationAlert } from '@/lib/whatsapp/twilio-send';
+import { FieldValue } from 'firebase-admin/firestore';
 
 export async function POST(
   req: NextRequest,
@@ -8,26 +9,15 @@ export async function POST(
 ) {
   try {
     const { bookingId } = await params;
-    const now = new Date().toISOString();
 
     const bookingRef = adminDb.collection('bookings').doc(bookingId);
     const bookingSnap = await bookingRef.get();
 
     if (!bookingSnap.exists) {
-      return NextResponse.json(
-        { success: false, error: 'Booking not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ success: false, error: 'Booking not found' }, { status: 404 });
     }
 
-    const booking = bookingSnap.data();
-
-    if (!booking) {
-      return NextResponse.json(
-        { success: false, error: 'Booking not found' },
-        { status: 404 }
-      );
-    }
+    const booking = bookingSnap.data()!;
 
     if (!['confirmed', 'checked_in'].includes(booking.status)) {
       return NextResponse.json(
@@ -36,44 +26,21 @@ export async function POST(
       );
     }
 
-    const date = booking.date;
-    const hourList = booking.hourList || [];
-
-    const batch = adminDb.batch();
-
-    batch.update(bookingRef, {
+    await bookingRef.update({
       status: 'cancelled',
-      cancelledAt: now,
+      cancelledAt: FieldValue.serverTimestamp(),
     });
 
-    for (const hour of hourList) {
-      const slotRef = adminDb.collection('availability').doc(date).collection('slots').doc(String(hour));
-      batch.update(slotRef, { status: 'available', bookingId: null, bookedAt: null });
-    }
+    const [customerResult, adminResult] = await Promise.allSettled([
+      sendCustomerCancellationAlert(booking.customerPhone, { date: booking.date, bookingId }),
+      sendAdminCancellationAlert({ guestName: booking.customerName, date: booking.date, bookingId }),
+    ]);
+    if (customerResult.status === 'rejected') console.error('[Admin Cancel] Customer WA failed:', customerResult.reason);
+    if (adminResult.status === 'rejected') console.error('[Admin Cancel] Admin WA failed:', adminResult.reason);
 
-    await batch.commit();
-
-    const waPayload = {
-      bookingId,
-      customerName: booking.customerName,
-      date: booking.date,
-      hours: booking.hours,
-      totalAmount: booking.totalAmount,
-    };
-
-    await sendWhatsAppNotification({ ...waPayload, eventType: 'cancelled' });
-
-    sendWhatsAppNotification(
-      { ...waPayload, eventType: 'customer_cancelled' },
-      formatCustomerJid(booking.customerPhone)
-    ).catch((err) => console.error('[Admin Cancel] Customer WA failed:', err));
-
-    return NextResponse.json({ success: true, data: { status: 'cancelled', cancelledAt: now } });
+    return NextResponse.json({ success: true, data: { status: 'cancelled' } });
   } catch (error) {
     console.error('Cancellation error:', error);
-    return NextResponse.json(
-      { success: false, error: 'Cancellation failed' },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, error: 'Cancellation failed' }, { status: 500 });
   }
 }

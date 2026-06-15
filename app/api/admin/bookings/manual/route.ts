@@ -1,25 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase/admin';
 import { FieldValue } from 'firebase-admin/firestore';
-import { generateHourList } from '@/lib/utils/availability';
+import { isTimeRangeAvailable } from '@/lib/utils/availability';
 import { sendAdminBookingAlert, sendCustomerConfirmation } from '@/lib/whatsapp/twilio-send';
 import { ApiResponse, Booking } from '@/lib/types';
 
-const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '1180');
+const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '50');
+const DEPOSIT_AMOUNT = parseInt(process.env.DEPOSIT_AMOUNT || '50');
+
+// Admin sessions run 10 AM – midnight (600–1440 min)
+const ADMIN_START = 600;
+const ADMIN_END = 1440;
 
 /**
  * POST /api/admin/bookings/manual
  * Create a confirmed booking without payment (walk-in / admin override).
- * Body: { date, startHour, hours, customerName, customerPhone, customerEmail?, amountPaid?, notes? }
+ * Body: { date, startTime, duration, customerName, customerPhone, customerEmail?, amountPaid?, paymentType?, notes? }
+ * startTime: minutes from midnight. duration: minutes.
  */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { date, startHour, hours, customerName, customerPhone, customerEmail, amountPaid, notes } = body;
+    const { date, startTime: rawStartTime, duration: rawDuration, customerName, customerPhone, customerEmail, amountPaid, paymentType, notes } = body;
 
-    if (!date || startHour === undefined || !hours || !customerName || !customerPhone) {
+    const startTime = rawStartTime !== undefined ? Number(rawStartTime) : undefined;
+    const duration = rawDuration !== undefined ? Number(rawDuration) : undefined;
+
+    if (!date || startTime === undefined || !duration || !customerName || !customerPhone) {
       return NextResponse.json(
-        { success: false, error: 'Missing required fields: date, startHour, hours, customerName, customerPhone' } as ApiResponse<null>,
+        { success: false, error: 'Missing required fields: date, startTime, duration, customerName, customerPhone' } as ApiResponse<null>,
         { status: 400 }
       );
     }
@@ -31,36 +40,40 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (hours < 1 || hours > 8) {
+    if (startTime < ADMIN_START || (startTime + duration) > ADMIN_END) {
       return NextResponse.json(
-        { success: false, error: 'Booking must be between 1 and 8 hours' } as ApiResponse<null>,
+        { success: false, error: `Admin bookings must fall within 10:00 AM – 12:00 AM` } as ApiResponse<null>,
         { status: 400 }
       );
     }
 
-    const hourList = generateHourList(startHour, hours);
-    const totalAmount = HOURLY_RATE * hours;
-    const paid = amountPaid !== undefined ? Number(amountPaid) : totalAmount;
-    const amountDue = Math.max(0, totalAmount - paid);
     const bookingId = adminDb.collection('bookings').doc().id;
+    const endTime = startTime + duration;
+    const totalAmount = Math.ceil(duration / 60) * HOURLY_RATE;
+    const paidAmount = amountPaid !== undefined ? Number(amountPaid) : totalAmount;
+    const balanceDue = Math.max(0, totalAmount - paidAmount);
+    const resolvedPaymentType: 'full' | 'deposit' =
+      paymentType === 'full' || paymentType === 'deposit'
+        ? paymentType
+        : paidAmount >= totalAmount ? 'full' : 'deposit';
 
     await adminDb.runTransaction(async (tx) => {
-      // Check all slots are available
-      for (const hour of hourList) {
-        const slotRef = adminDb.doc(`availability/${date}/slots/${hour}`);
-        const slotSnap = await tx.get(slotRef);
-        if (slotSnap.exists && slotSnap.data()?.status !== 'available') {
-          throw new Error(`Slot ${hour}:00 is already booked or unavailable`);
+      const existingSnap = await tx.get(
+        adminDb.collection('bookings')
+          .where('date', '==', date)
+          .where('status', 'in', ['confirmed', 'checked_in'])
+      );
+
+      for (const doc of existingSnap.docs) {
+        const b = doc.data();
+        const bStart = b.startTime ?? b.startMinute ?? (b.startHour ?? 12) * 60;
+        const bDur = b.duration ?? (b.hours ?? 1) * 60;
+        const bEnd = b.endTime ?? bStart + bDur;
+        if (startTime < bEnd && endTime > bStart) {
+          throw new Error(`Time conflict: overlaps booking ${doc.id}`);
         }
       }
 
-      // Lock all slots
-      for (const hour of hourList) {
-        const slotRef = adminDb.doc(`availability/${date}/slots/${hour}`);
-        tx.set(slotRef, { status: 'booked', bookingId, bookedAt: FieldValue.serverTimestamp() }, { merge: true });
-      }
-
-      // Create booking record as confirmed
       const bookingRef = adminDb.collection('bookings').doc(bookingId);
       tx.set(bookingRef, {
         id: bookingId,
@@ -68,12 +81,15 @@ export async function POST(req: NextRequest) {
         customerEmail: customerEmail || '',
         customerPhone,
         date,
-        hours,
-        startHour,
-        hourList,
-        depositPaid: paid,
+        startTime,
+        duration,
+        endTime,
+        paymentType: resolvedPaymentType,
         totalAmount,
-        amountDue,
+        paidAmount,
+        balanceDue,
+        depositPaid: paidAmount,
+        amountDue: balanceDue,
         status: 'confirmed',
         notes: notes || '',
         createdAt: FieldValue.serverTimestamp(),
@@ -81,10 +97,9 @@ export async function POST(req: NextRequest) {
       });
     });
 
-    sendAdminBookingAlert({ guestName: customerName, date, hours, amountDue, bookingId })
+    sendAdminBookingAlert({ guestName: customerName, date, duration, balanceDue, bookingId, paymentType: resolvedPaymentType })
       .catch((err) => console.error('[Manual Booking] Admin WA failed:', err));
-
-    sendCustomerConfirmation(customerPhone, { date, hours, amountDue, bookingId })
+    sendCustomerConfirmation(customerPhone, { date, duration, balanceDue, bookingId, paymentType: resolvedPaymentType })
       .catch((err) => console.error('[Manual Booking] Customer WA failed:', err));
 
     return NextResponse.json(
@@ -93,7 +108,7 @@ export async function POST(req: NextRequest) {
     );
   } catch (error) {
     console.error('Manual booking error:', error);
-    if (error instanceof Error && error.message.includes('already booked')) {
+    if (error instanceof Error && error.message.includes('conflict')) {
       return NextResponse.json(
         { success: false, error: error.message } as ApiResponse<null>,
         { status: 409 }
@@ -108,13 +123,13 @@ export async function POST(req: NextRequest) {
 
 /**
  * PUT /api/admin/bookings/manual
- * Edit an existing booking. If date/time changes, old slots are released and new ones locked.
- * Body: { bookingId, date?, startHour?, hours?, customerName?, customerPhone?, customerEmail?, amountPaid?, notes? }
+ * Edit an existing booking. If date/time changes, checks for conflicts.
+ * Body: { bookingId, date?, startTime?, duration?, customerName?, customerPhone?, customerEmail?, amountPaid?, notes? }
  */
 export async function PUT(req: NextRequest) {
   try {
     const body = await req.json();
-    const { bookingId, date, startHour, hours, customerName, customerPhone, customerEmail, amountPaid, notes } = body;
+    const { bookingId, date, startTime: rawStartTime, duration: rawDuration, customerName, customerPhone, customerEmail, amountPaid, notes } = body;
 
     if (!bookingId) {
       return NextResponse.json(
@@ -130,71 +145,69 @@ export async function PUT(req: NextRequest) {
       );
     }
 
-    if (hours !== undefined && (hours < 1 || hours > 8)) {
-      return NextResponse.json(
-        { success: false, error: 'Booking must be between 1 and 8 hours' } as ApiResponse<null>,
-        { status: 400 }
-      );
-    }
+    const incomingStartTime = rawStartTime !== undefined ? Number(rawStartTime) : undefined;
+    const incomingDuration = rawDuration !== undefined ? Number(rawDuration) : undefined;
 
     const bookingRef = adminDb.collection('bookings').doc(bookingId);
 
     await adminDb.runTransaction(async (tx) => {
       const bookingSnap = await tx.get(bookingRef);
-      if (!bookingSnap.exists) {
-        throw new Error('Booking not found');
-      }
+      if (!bookingSnap.exists) throw new Error('Booking not found');
 
-      const existing = bookingSnap.data() as Booking & { startHour?: number };
+      const existing = bookingSnap.data() as Booking;
+      const existingStart = existing.startTime ?? existing.startMinute ?? (existing.startHour ?? 12) * 60;
+      const existingDuration = existing.duration ?? (existing.hours ?? 1) * 60;
+
       const newDate = date ?? existing.date;
-      const newStartHour = startHour ?? existing.startHour ?? Number(existing.hourList[0]);
-      const newHours = hours ?? existing.hours;
-      const newHourList = generateHourList(newStartHour, newHours);
+      const newStart = incomingStartTime ?? existingStart;
+      const newDuration = incomingDuration ?? existingDuration;
+      const newEnd = newStart + newDuration;
 
       const timeChanged =
-        newDate !== existing.date ||
-        newStartHour !== (existing.startHour ?? Number(existing.hourList[0])) ||
-        newHours !== existing.hours;
+        newDate !== existing.date || newStart !== existingStart || newDuration !== existingDuration;
 
       if (timeChanged) {
-        // Release old slots
-        for (const hour of existing.hourList) {
-          const slotRef = adminDb.doc(`availability/${existing.date}/slots/${hour}`);
-          tx.set(slotRef, { status: 'available', bookingId: null, bookedAt: null }, { merge: true });
-        }
+        const existingSnap = await tx.get(
+          adminDb.collection('bookings')
+            .where('date', '==', newDate)
+            .where('status', 'in', ['confirmed', 'checked_in'])
+        );
 
-        // Check new slots are available
-        for (const hour of newHourList) {
-          const slotRef = adminDb.doc(`availability/${newDate}/slots/${hour}`);
-          const slotSnap = await tx.get(slotRef);
-          if (slotSnap.exists && slotSnap.data()?.status !== 'available') {
-            throw new Error(`Slot ${hour}:00 on ${newDate} is already booked or unavailable`);
+        for (const doc of existingSnap.docs) {
+          if (doc.id === bookingId) continue;
+          const b = doc.data();
+          const bStart = b.startTime ?? b.startMinute ?? (b.startHour ?? 12) * 60;
+          const bDur = b.duration ?? (b.hours ?? 1) * 60;
+          const bEnd = b.endTime ?? bStart + bDur;
+          if (newStart < bEnd && newEnd > bStart) {
+            throw new Error(`Time conflict: overlaps booking ${doc.id}`);
           }
-        }
-
-        // Lock new slots
-        for (const hour of newHourList) {
-          const slotRef = adminDb.doc(`availability/${newDate}/slots/${hour}`);
-          tx.set(slotRef, { status: 'booked', bookingId, bookedAt: FieldValue.serverTimestamp() }, { merge: true });
         }
       }
 
-      const totalAmount = HOURLY_RATE * newHours;
+      const totalAmount = Math.ceil(newDuration / 60) * HOURLY_RATE;
       const updates: Record<string, unknown> = { updatedAt: FieldValue.serverTimestamp() };
 
       if (timeChanged) {
         updates.date = newDate;
-        updates.startHour = newStartHour;
-        updates.hours = newHours;
-        updates.hourList = newHourList;
+        updates.startTime = newStart;
+        updates.duration = newDuration;
+        updates.endTime = newEnd;
         updates.totalAmount = totalAmount;
       }
       if (amountPaid !== undefined) {
-        const paid = Number(amountPaid);
-        updates.depositPaid = paid;
-        updates.amountDue = Math.max(0, (timeChanged ? totalAmount : (existing.totalAmount ?? totalAmount)) - paid);
+        const base = timeChanged ? totalAmount : (existing.totalAmount ?? totalAmount);
+        const newPaid = Number(amountPaid);
+        const newBalance = Math.max(0, base - newPaid);
+        updates.paidAmount = newPaid;
+        updates.balanceDue = newBalance;
+        updates.depositPaid = newPaid;
+        updates.amountDue = newBalance;
+        updates.paymentType = newPaid >= base ? 'full' : 'deposit';
       } else if (timeChanged) {
-        updates.amountDue = Math.max(0, totalAmount - (existing.depositPaid ?? 0));
+        const newBalance = Math.max(0, totalAmount - (existing.paidAmount ?? existing.depositPaid ?? 0));
+        updates.balanceDue = newBalance;
+        updates.amountDue = newBalance;
       }
       if (customerName !== undefined) updates.customerName = customerName;
       if (customerPhone !== undefined) updates.customerPhone = customerPhone;
@@ -216,7 +229,7 @@ export async function PUT(req: NextRequest) {
           { status: 404 }
         );
       }
-      if (error.message.includes('already booked')) {
+      if (error.message.includes('conflict')) {
         return NextResponse.json(
           { success: false, error: error.message } as ApiResponse<null>,
           { status: 409 }

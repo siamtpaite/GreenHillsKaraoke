@@ -8,3 +8,4 @@ whatsapp_sessions/
 greenhills-karaoke-firebase-adminsdk-fbsvc-6bfecb78be.json
 .vercel
 twilio_2FA_recovery_code.txt
+.env*

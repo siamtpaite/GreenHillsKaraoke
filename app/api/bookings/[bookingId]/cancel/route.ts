@@ -60,11 +60,18 @@ export async function POST(
 
     await cancelBooking(bookingId);
 
-    sendCustomerCancellationAlert(booking.customerPhone, { date: booking.date, bookingId })
-      .catch((err) => console.error('[Cancel] Customer WA failed:', err));
+    // Await both — in serverless, fire-and-forget can be killed before completion
+    const [customerResult, adminResult] = await Promise.allSettled([
+      sendCustomerCancellationAlert(booking.customerPhone, { date: booking.date, bookingId }),
+      sendAdminCancellationAlert({ guestName: booking.customerName, date: booking.date, bookingId }),
+    ]);
 
-    sendAdminCancellationAlert({ guestName: booking.customerName, date: booking.date, bookingId })
-      .catch((err) => console.error('[Cancel] Admin WA failed:', err));
+    if (customerResult.status === 'rejected') {
+      console.error('[Cancel] Customer WA failed:', customerResult.reason);
+    }
+    if (adminResult.status === 'rejected') {
+      console.error('[Cancel] Admin WA failed:', adminResult.reason);
+    }
 
     return NextResponse.json(
       {

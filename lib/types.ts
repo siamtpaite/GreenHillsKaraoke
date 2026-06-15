@@ -5,49 +5,53 @@ export interface Booking {
   customerEmail: string;
   customerPhone: string;
   date: string; // YYYY-MM-DD
-  startHour: number;
-  hours: number;
-  hourList: string[]; // ["14", "15"]
-  depositPaid: number;
+  startTime: number;    // minutes from midnight (e.g., 780 = 1:00 PM)
+  duration: number;     // session length in minutes (e.g., 120 = 2 hrs)
+  endTime: number;      // startTime + duration (stored for query convenience)
+  // Legacy fields — only present on bookings created before the timeline refactor
+  startMinute?: number;
+  startHour?: number;
+  hours?: number;
+  slotList?: string[];
+  hourList?: string[];
+  // Payment
+  paymentType: 'full' | 'deposit';
   totalAmount: number;
-  amountDue: number;
-  status: 'confirmed' | 'completed' | 'no_show' | 'cancelled';
+  paidAmount: number;   // charged at booking time
+  balanceDue: number;   // remaining at check-in (0 for full payment)
+  depositPaid: number;  // alias for paidAmount — legacy compat
+  amountDue: number;    // alias for balanceDue — legacy compat
+  // Status
+  status: 'confirmed' | 'checked_in' | 'completed' | 'no_show' | 'cancelled';
   razorpayOrderId?: string;
   razorpayPaymentId?: string;
   createdAt: Date;
   checkInTime?: Date;
   checkOutTime?: Date;
   cancelledAt?: Date;
+  notes?: string;
 }
 
-// Slot types
-export interface Slot {
-  hour: number;
-  status: 'available' | 'booked' | 'blackout';
-  customerId?: string;
-  bookingId?: string;
-  bookedAt?: Date;
-}
-
-// Availability response
+// Availability response — booked time ranges for a date
 export interface AvailabilityResponse {
   date: string;
   blackout?: boolean;
-  slots: Array<{
-    hour: number;
-    status: 'available' | 'booked' | 'blackout';
-    timeSlot: string; // "12:00 PM - 1:00 PM"
+  bookedRanges: Array<{
+    start: number;      // minutes from midnight
+    end: number;        // minutes from midnight
+    bookingId: string;
   }>;
 }
 
-// Booking request
+// Booking request — sent from initiate/confirm routes and manual admin entry
 export interface BookingRequest {
   date: string;
-  hours: number;
-  startHour: number;
+  startTime: number;    // minutes from midnight
+  duration: number;     // minutes
   customerName: string;
   customerEmail: string;
   customerPhone: string;
+  paymentType: 'full' | 'deposit';
 }
 
 // Razorpay order response

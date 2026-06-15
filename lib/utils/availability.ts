@@ -1,16 +1,32 @@
-import { FieldValue } from 'firebase-admin/firestore';
 import { adminDb } from '@/lib/firebase/admin';
-import { Slot, AvailabilityResponse } from '@/lib/types';
+import { AvailabilityResponse } from '@/lib/types';
 
 const OPERATING_HOURS_START = parseInt(process.env.OPERATING_HOURS_START || '12');
 const OPERATING_HOURS_END = parseInt(process.env.OPERATING_HOURS_END || '22');
 
-export function formatTimeSlot(hour: number): string {
-  const start = new Date();
-  start.setHours(hour, 0, 0);
-  const end = new Date();
-  end.setHours(hour + 1, 0, 0);
-  return `${start.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })} - ${end.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })}`;
+// "780" → "1:00 PM", "1440" → "12:00 AM"
+export function minutesToTime(minutes: number): string {
+  const clamped = minutes >= 1440 ? 0 : minutes;
+  const h = Math.floor(clamped / 60);
+  const m = clamped % 60;
+  if (minutes >= 1440) return '12:00 AM';
+  const period = h >= 12 ? 'PM' : 'AM';
+  const displayH = h > 12 ? h - 12 : h === 0 ? 12 : h;
+  return `${displayH}:${m.toString().padStart(2, '0')} ${period}`;
+}
+
+// "1:00 PM – 3:00 PM"
+export function formatTimeRange(startTime: number, duration: number): string {
+  return `${minutesToTime(startTime)} – ${minutesToTime(startTime + duration)}`;
+}
+
+// "2 hours", "1h 30min", "30 min"
+export function formatDuration(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (m === 0) return `${h} hour${h !== 1 ? 's' : ''}`;
+  if (h === 0) return `${m} min`;
+  return `${h}h ${m}min`;
 }
 
 export async function isBlackoutDate(date: string): Promise<boolean> {
@@ -19,7 +35,7 @@ export async function isBlackoutDate(date: string): Promise<boolean> {
 }
 
 export async function getOperatingHours(date: string): Promise<{ open: number; close: number }> {
-  const dayOfWeek = new Date(date).toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+  const dayOfWeek = new Date(date + 'T12:00').toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
   const snap = await adminDb.doc(`operatingHours/${dayOfWeek}`).get();
   if (snap.exists) {
     const data = snap.data()!;
@@ -28,49 +44,66 @@ export async function getOperatingHours(date: string): Promise<{ open: number; c
   return { open: OPERATING_HOURS_START, close: OPERATING_HOURS_END };
 }
 
+// Resolve a legacy booking's start/end times from any field format
+function resolveRange(data: FirebaseFirestore.DocumentData): { start: number; end: number } {
+  const start =
+    data.startTime ??
+    data.startMinute ??
+    (data.startHour != null ? data.startHour * 60 : null) ??
+    (data.hourList?.[0] != null ? Number(data.hourList[0]) * 60 : null) ??
+    OPERATING_HOURS_START * 60;
+
+  const duration =
+    data.duration ??
+    (data.hours != null ? data.hours * 60 : null) ??
+    60;
+
+  const end = data.endTime ?? start + duration;
+  return { start, end };
+}
+
+// Fetch all confirmed/checked-in bookings for a date and return their time ranges
+export async function getBookedRanges(date: string): Promise<AvailabilityResponse['bookedRanges']> {
+  const snap = await adminDb
+    .collection('bookings')
+    .where('date', '==', date)
+    .where('status', 'in', ['confirmed', 'checked_in'])
+    .get();
+
+  return snap.docs.map((doc) => {
+    const { start, end } = resolveRange(doc.data());
+    return { start, end, bookingId: doc.id };
+  });
+}
+
+// Main availability endpoint response
 export async function getAvailability(date: string): Promise<AvailabilityResponse> {
   if (await isBlackoutDate(date)) {
-    return { date, blackout: true, slots: [] };
+    return { date, blackout: true, bookedRanges: [] };
   }
-  const hours = await getOperatingHours(date);
-  const slots: AvailabilityResponse['slots'] = [];
-  for (let hour = hours.open; hour < hours.close; hour++) {
-    const snap = await adminDb.doc(`availability/${date}/slots/${hour}`).get();
-    const status = snap.exists ? (snap.data()!.status as Slot['status']) : 'available';
-    slots.push({ hour, status, timeSlot: formatTimeSlot(hour) });
-  }
-  return { date, slots };
+  const bookedRanges = await getBookedRanges(date);
+  return { date, bookedRanges };
 }
 
-export async function initializeSlotsForDate(date: string): Promise<void> {
-  const existing = await adminDb.collection(`availability/${date}/slots`).get();
-  if (!existing.empty) return;
-  const hours = await getOperatingHours(date);
-  const batch = adminDb.batch();
-  for (let hour = hours.open; hour < hours.close; hour++) {
-    batch.set(adminDb.doc(`availability/${date}/slots/${String(hour)}`), {
-      status: 'available',
-      hour,
-      createdAt: FieldValue.serverTimestamp(),
-    });
-  }
-  await batch.commit();
-}
+// Check if [startTime, startTime+duration] is free of confirmed/checked-in bookings.
+// excludeBookingId is used for edit flows (skip own booking when checking).
+export async function isTimeRangeAvailable(
+  date: string,
+  startTime: number,
+  duration: number,
+  excludeBookingId?: string
+): Promise<boolean> {
+  const endTime = startTime + duration;
+  const snap = await adminDb
+    .collection('bookings')
+    .where('date', '==', date)
+    .where('status', 'in', ['confirmed', 'checked_in'])
+    .get();
 
-export async function areHoursAvailable(date: string, startHour: number, numHours: number): Promise<boolean> {
-  for (let i = 0; i < numHours; i++) {
-    const snap = await adminDb.doc(`availability/${date}/slots/${String(startHour + i)}`).get();
-    if (snap.exists && snap.data()!.status !== 'available') return false;
+  for (const doc of snap.docs) {
+    if (doc.id === excludeBookingId) continue;
+    const { start: bStart, end: bEnd } = resolveRange(doc.data());
+    if (startTime < bEnd && endTime > bStart) return false;
   }
   return true;
-}
-
-export function formatHour(hour: number): string {
-  const date = new Date();
-  date.setHours(hour, 0, 0);
-  return date.toLocaleString('en-US', { hour: 'numeric', hour12: true });
-}
-
-export function generateHourList(startHour: number, numHours: number): string[] {
-  return Array.from({ length: numHours }, (_, i) => String(startHour + i));
 }

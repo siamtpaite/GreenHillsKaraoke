@@ -9,24 +9,28 @@ const ADMIN_NUMBERS = [
 function getClient() {
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
-  if (!accountSid || !authToken) {
-    throw new Error('Missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN');
-  }
+  if (!accountSid || !authToken) throw new Error('Missing TWILIO_ACCOUNT_SID or TWILIO_AUTH_TOKEN');
   return twilio(accountSid, authToken);
 }
 
 function getFromNumber(): string {
   const n = process.env.TWILIO_WHATSAPP_NUMBER;
   if (!n) throw new Error('Missing TWILIO_WHATSAPP_NUMBER');
-  // Accept "whatsapp:+91..." or plain "+91..." from the env var
   return n.startsWith('whatsapp:') ? n : `whatsapp:${n}`;
 }
 
 function toWhatsApp(phone: string): string {
-  // Normalise to E.164 for Indian numbers stored without country code
   const digits = phone.replace(/\D/g, '');
   const e164 = digits.length === 10 ? `+91${digits}` : `+${digits}`;
   return `whatsapp:${e164}`;
+}
+
+function fmtDuration(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (m === 0) return `${h} hour${h !== 1 ? 's' : ''}`;
+  if (h === 0) return `${m} min`;
+  return `${h}h ${m}min`;
 }
 
 interface SendOptions {
@@ -53,16 +57,22 @@ export async function sendCustomerConfirmation(
   customerPhone: string,
   bookingDetails: {
     date: string;
-    hours: number;
-    amountDue: number;
+    duration: number;   // minutes
+    balanceDue: number;
     bookingId: string;
+    paymentType: 'full' | 'deposit';
   }
 ) {
+  const balanceLine =
+    bookingDetails.paymentType === 'full'
+      ? `✅ Fully paid — nothing due at venue`
+      : `💰 Balance Due at Venue: ₹${bookingDetails.balanceDue}`;
+
   const message =
     `✅ *BOOKING CONFIRMED — Green Hills Karaoke*\n\n` +
     `📅 Date: ${bookingDetails.date}\n` +
-    `⏱️ Duration: ${bookingDetails.hours} hour(s)\n` +
-    `💰 Amount Due at Venue: ₹${bookingDetails.amountDue}\n` +
+    `⏱️ Duration: ${fmtDuration(bookingDetails.duration)}\n` +
+    `${balanceLine}\n` +
     `🔖 Booking ID: ${bookingDetails.bookingId}\n\n` +
     `⏰ Please arrive 10–15 mins before your slot.\n\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -73,7 +83,7 @@ export async function sendCustomerConfirmation(
     `3. Smoking only in designated outdoor area\n` +
     `4. Handle microphones & equipment with care\n` +
     `5. Equipment damage will be charged to the guest\n` +
-    `6. ₹500 deposit is strictly non-refundable\n` +
+    `6. ₹50 deposit is strictly non-refundable\n` +
     `7. Late arrivals will NOT receive extra time\n` +
     `8. Extensions subject to availability — request in advance\n` +
     `9. Minors (under 18) must be accompanied by a parent/guardian\n` +
@@ -89,16 +99,22 @@ export async function sendCustomerConfirmation(
 export async function sendAdminBookingAlert(bookingDetails: {
   guestName: string;
   date: string;
-  hours: number;
-  amountDue: number;
+  duration: number;   // minutes
+  balanceDue: number;
   bookingId: string;
+  paymentType: 'full' | 'deposit';
 }) {
+  const paymentLine =
+    bookingDetails.paymentType === 'full'
+      ? `Payment: FULL (₹0 due at venue)`
+      : `Payment: DEPOSIT — ₹${bookingDetails.balanceDue} due at venue`;
+
   const message =
     `[BOOKING ALERT] 🎤\n` +
     `Guest: ${bookingDetails.guestName}\n` +
     `Date: ${bookingDetails.date}\n` +
-    `Duration: ${bookingDetails.hours} hrs\n` +
-    `Amount: ₹${bookingDetails.amountDue}\n` +
+    `Duration: ${fmtDuration(bookingDetails.duration)}\n` +
+    `${paymentLine}\n` +
     `Booking ID: ${bookingDetails.bookingId}`;
 
   const results = [];
@@ -134,7 +150,7 @@ export async function sendCustomerCancellationAlert(
     `❌ *BOOKING CANCELLED — Green Hills Karaoke*\n\n` +
     `📅 Date: ${bookingDetails.date}\n` +
     `🔖 Booking ID: ${bookingDetails.bookingId}\n\n` +
-    `Your ₹500 deposit is non-refundable.\n\n` +
+    `Your ₹50 deposit is non-refundable.\n\n` +
     `To make a new booking visit our booking page.\n` +
     `Green Hills Karaoke`;
 
