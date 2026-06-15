@@ -1,37 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { sendWhatsAppNotification } from '@/lib/whatsapp/baileys-send';
+import { sendCustomerConfirmation, sendAdminBookingAlert } from '@/lib/whatsapp/twilio-send';
 
 export async function POST(req: NextRequest) {
   try {
-    const mockBooking = {
-      bookingId: 'TEST-' + Date.now(),
-      customerName: 'Nem Test',
+    const testPhone = '7085766889';
+    const testBooking = {
       date: new Date().toISOString().split('T')[0],
-      hours: 2,
-      totalAmount: 2360,
-      eventType: 'booking_confirmed' as const,
+      duration: 60,
+      balanceDue: 0,
+      bookingId: 'TEST-' + Date.now(),
+      paymentType: 'full' as const,
     };
 
-    console.log('📤 Sending mock WhatsApp message:', mockBooking);
+    console.log('[test/whatsapp] Sending test WhatsApp messages:', testBooking);
 
-    const result = await sendWhatsAppNotification(mockBooking);
+    const [customerResult, adminResults] = await Promise.all([
+      sendCustomerConfirmation(testPhone, testBooking),
+      sendAdminBookingAlert({ guestName: 'Test Guest', ...testBooking }),
+    ]);
+
+    const allSuccess = customerResult.success && adminResults.every((r: any) => r.success);
 
     return NextResponse.json(
       {
-        success: result.success,
-        message: result.success
-          ? 'WhatsApp test message sent'
-          : 'WhatsApp test message could not be sent yet. The session is not authenticated.',
-        data: mockBooking,
-        result,
+        success: allSuccess,
+        message: allSuccess ? 'Test WhatsApp messages sent' : 'Some messages failed — check logs',
+        customerResult,
+        adminResults,
       },
-      { status: result.success ? 200 : 503 }
+      { status: allSuccess ? 200 : 503 }
     );
   } catch (error) {
-    console.error('Test error:', error);
-    return NextResponse.json(
-      { success: false, error: String(error) },
-      { status: 500 }
-    );
+    console.error('[test/whatsapp] Error:', error);
+    return NextResponse.json({ success: false, error: String(error) }, { status: 500 });
   }
 }

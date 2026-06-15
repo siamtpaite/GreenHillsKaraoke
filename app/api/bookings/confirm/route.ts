@@ -100,10 +100,13 @@ export async function POST(request: NextRequest) {
     const totalAmount = Math.ceil(duration / 60) * HOURLY_RATE;
     const balanceDue = paymentType === 'full' ? 0 : totalAmount - DEPOSIT_AMOUNT;
 
-    sendCustomerConfirmation(customerPhone, { date, duration, balanceDue, bookingId, paymentType })
-      .catch((e) => console.error('[confirm] Customer WA failed:', e));
-    sendAdminBookingAlert({ guestName: customerName, date, duration, balanceDue, bookingId, paymentType })
-      .catch((e) => console.error('[confirm] Admin WA failed:', e));
+    console.log(`[confirm] Sending WhatsApp to customer=${customerPhone} admins=3 bookingId=${bookingId}`);
+    await Promise.all([
+      sendCustomerConfirmation(customerPhone, { date, duration, balanceDue, bookingId, paymentType })
+        .catch((e) => console.error('[confirm] Customer WA failed:', e)),
+      sendAdminBookingAlert({ guestName: customerName, date, duration, balanceDue, bookingId, paymentType })
+        .catch((e) => console.error('[confirm] Admin WA failed:', e)),
+    ]);
 
     return NextResponse.json(
       { success: true, message: 'Booking confirmed', data: { bookingId, status: 'confirmed' } } as ApiResponse<any>,

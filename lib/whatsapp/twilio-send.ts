@@ -39,16 +39,15 @@ interface SendOptions {
 }
 
 export async function sendWhatsAppMessage(options: SendOptions) {
+  const from = getFromNumber();
+  const to = toWhatsApp(options.to);
+  console.log(`[Twilio] → from=${from} to=${to} msgLen=${options.message.length}`);
   try {
-    const result = await getClient().messages.create({
-      from: getFromNumber(),
-      to: toWhatsApp(options.to),
-      body: options.message,
-    });
-    console.log(`[Twilio] Sent to ${options.to}, SID: ${result.sid}`);
+    const result = await getClient().messages.create({ from, to, body: options.message });
+    console.log(`[Twilio] ✓ Delivered to ${options.to}, SID=${result.sid} status=${result.status}`);
     return { success: true, sid: result.sid };
-  } catch (error) {
-    console.error(`[Twilio] Failed to send to ${options.to}:`, error);
+  } catch (error: any) {
+    console.error(`[Twilio] ✗ Failed to ${options.to}: code=${error?.code} msg=${error?.message}`, error);
     return { success: false, error };
   }
 }
