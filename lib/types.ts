@@ -5,12 +5,13 @@ export interface Booking {
   customerEmail: string;
   customerPhone: string;
   date: string; // YYYY-MM-DD
+  startHour: number;
   hours: number;
   hourList: string[]; // ["14", "15"]
   depositPaid: number;
   totalAmount: number;
   amountDue: number;
-  status: 'pending_full_payment' | 'confirmed' | 'completed' | 'no_show' | 'cancelled';
+  status: 'confirmed' | 'completed' | 'no_show' | 'cancelled';
   razorpayOrderId?: string;
   razorpayPaymentId?: string;
   createdAt: Date;

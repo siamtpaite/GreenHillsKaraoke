@@ -107,7 +107,7 @@ export default function BookingPage() {
           bookingId: data.data.bookingId,
           razorpayOrderId: data.data.razorpayOrder?.id || '',
           totalAmount,
-          depositAmount: 500,
+          depositAmount: Math.round((data.data.razorpayOrder?.amount ?? 50000) / 100),
         });
         setStep('payment');
       } else {
@@ -168,14 +168,20 @@ export default function BookingPage() {
       },
       theme: { color: '#00D9FF' },
     };
-    const script = document.createElement('script');
-    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-    script.async = true;
-    script.onload = () => {
+    const openRazorpay = () => {
       const rzp = new (window as any).Razorpay(options);
       rzp.open();
     };
-    document.body.appendChild(script);
+
+    if ((window as any).Razorpay) {
+      openRazorpay();
+    } else {
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.async = true;
+      script.onload = openRazorpay;
+      document.body.appendChild(script);
+    }
   };
 
   const handleCancelBooking = async () => {

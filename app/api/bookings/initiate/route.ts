@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { initializeSlotsForDate, areHoursAvailable, isBlackoutDate } from '@/lib/utils/availability';
+import { initializeSlotsForDate, areHoursAvailable, isBlackoutDate, getOperatingHours } from '@/lib/utils/availability';
 import { createRazorpayOrder } from '@/lib/payment/razorpay';
 import { adminDb } from '@/lib/firebase/admin';
 import { FieldValue } from 'firebase-admin/firestore';
@@ -50,6 +50,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: 'This date is unavailable for booking' } as ApiResponse<null>,
         { status: 409 }
+      );
+    }
+
+    // Validate requested hours fall within operating hours
+    const operatingHours = await getOperatingHours(date);
+    if (startHour < operatingHours.open || (startHour + hours) > operatingHours.close) {
+      return NextResponse.json(
+        { success: false, error: 'Requested hours are outside operating hours' } as ApiResponse<null>,
+        { status: 400 }
       );
     }
 

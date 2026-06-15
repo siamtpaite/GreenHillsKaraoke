@@ -1,26 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase/admin';
-import { FieldValue } from 'firebase-admin/firestore';
+import { Timestamp } from 'firebase-admin/firestore';
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'GreenHills2021';
-// Bookings stuck in pending_payment longer than this are considered orphaned
 const DEFAULT_STALE_MINUTES = 60;
 
+/**
+ * POST /api/admin/cleanup-stale-pending
+ * Deletes stale razorpayOrders docs created by abandoned payment initiations
+ * (i.e. /api/bookings/initiate was called, Razorpay order was created, but the
+ * customer never completed payment so /api/bookings/confirm was never called).
+ */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
+    const adminPassword = process.env.ADMIN_PASSWORD;
 
-    if (body.password !== ADMIN_PASSWORD) {
+    if (!adminPassword || body.password !== adminPassword) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
     const staleMinutes: number = body.staleMinutes ?? DEFAULT_STALE_MINUTES;
-    const cutoff = new Date(Date.now() - staleMinutes * 60 * 1000);
+    const cutoff = Timestamp.fromDate(new Date(Date.now() - staleMinutes * 60 * 1000));
 
     const snapshot = await adminDb
-      .collection('bookings')
-      .where('status', '==', 'pending_payment')
+      .collection('razorpayOrders')
+      .where('createdAt', '<', cutoff)
       .get();
+
+    if (snapshot.empty) {
+      console.log('[cleanup-pending] No stale razorpayOrders found');
+      return NextResponse.json({ success: true, cleaned: 0 });
+    }
 
     let cleaned = 0;
     let batch = adminDb.batch();
@@ -35,33 +45,16 @@ export async function POST(req: NextRequest) {
 
     for (const docSnap of snapshot.docs) {
       const data = docSnap.data();
-      const createdAt: Date = data.createdAt?.toDate?.() ?? new Date(0);
-
-      if (createdAt > cutoff) {
-        console.log(`[cleanup-pending] Skipping ${docSnap.id} — created ${createdAt.toISOString()}, within cutoff`);
-        continue;
-      }
-
-      console.log(`[cleanup-pending] Releasing ${docSnap.id} (${data.customerName}) — ${data.date}, created ${createdAt.toISOString()}`);
-
-      // Release each slot
-      for (const hour of (data.hourList ?? [])) {
-        if (opsInBatch >= 499) await flush();
-        const slotRef = adminDb.doc(`availability/${data.date}/slots/${hour}`);
-        batch.set(slotRef, { status: 'available', bookingId: null, bookedAt: null }, { merge: true });
-        opsInBatch++;
-      }
-
-      // Delete the orphaned booking document
+      console.log(`[cleanup-pending] Deleting stale order ${docSnap.id} (bookingId: ${data.bookingId})`);
       if (opsInBatch >= 499) await flush();
-      batch.delete(adminDb.doc(`bookings/${docSnap.id}`));
+      batch.delete(docSnap.ref);
       opsInBatch++;
       cleaned++;
     }
 
     await flush();
 
-    console.log(`[cleanup-pending] Done — ${cleaned} stale pending_payment bookings removed`);
+    console.log(`[cleanup-pending] Done — ${cleaned} stale razorpayOrders removed`);
     return NextResponse.json({ success: true, cleaned });
   } catch (error) {
     console.error('[cleanup-pending] Error:', error);
