@@ -19,7 +19,15 @@ function getClient() {
 function getFromNumber(): string {
   const n = process.env.TWILIO_WHATSAPP_NUMBER;
   if (!n) throw new Error('Missing TWILIO_WHATSAPP_NUMBER');
-  return n;
+  // Accept "whatsapp:+91..." or plain "+91..." from the env var
+  return n.startsWith('whatsapp:') ? n : `whatsapp:${n}`;
+}
+
+function toWhatsApp(phone: string): string {
+  // Normalise to E.164 for Indian numbers stored without country code
+  const digits = phone.replace(/\D/g, '');
+  const e164 = digits.length === 10 ? `+91${digits}` : `+${digits}`;
+  return `whatsapp:${e164}`;
 }
 
 interface SendOptions {
@@ -30,8 +38,8 @@ interface SendOptions {
 export async function sendWhatsAppMessage(options: SendOptions) {
   try {
     const result = await getClient().messages.create({
-      from: `whatsapp:${getFromNumber()}`,
-      to: `whatsapp:${options.to}`,
+      from: getFromNumber(),
+      to: toWhatsApp(options.to),
       body: options.message,
     });
     console.log(`[Twilio] Sent to ${options.to}, SID: ${result.sid}`);

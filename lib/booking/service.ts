@@ -69,32 +69,6 @@ export async function lockAndConfirmBooking(
 }
 
 /**
- * Confirm booking after Razorpay payment success
- */
-export async function confirmBookingPayment(
-  bookingId: string,
-  razorpayPaymentId: string,
-  razorpayOrderId: string
-): Promise<void> {
-  const bookingRef = adminDb.doc(`bookings/${bookingId}`);
-
-  await adminDb.runTransaction(async (transaction) => {
-    const bookingSnap = await transaction.get(bookingRef);
-
-    if (!bookingSnap.exists) {
-      throw new Error('Booking not found');
-    }
-
-    transaction.update(bookingRef, {
-      depositPaid: DEPOSIT_AMOUNT,
-      status: 'pending_full_payment',
-      razorpayPaymentId,
-      razorpayOrderId,
-    });
-  });
-}
-
-/**
  * Cancel a booking and release slots
  */
 export async function cancelBooking(bookingId: string): Promise<void> {

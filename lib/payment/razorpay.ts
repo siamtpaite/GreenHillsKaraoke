@@ -57,7 +57,8 @@ export async function createRazorpayOrder(
 }
 
 /**
- * Verify Razorpay payment signature (webhook verification)
+ * Verify Razorpay payment signature — for client-side confirmation after payment.success.
+ * Uses key_secret and signs "orderId|paymentId".
  */
 export function verifyPaymentSignature(
   orderId: string,
@@ -66,12 +67,24 @@ export function verifyPaymentSignature(
 ): boolean {
   const { keySecret } = getCredentials();
   if (!keySecret) throw new Error('Razorpay credentials are not configured');
-  const message = `${orderId}|${paymentId}`;
   const expectedSignature = crypto
     .createHmac('sha256', keySecret)
-    .update(message)
+    .update(`${orderId}|${paymentId}`)
     .digest('hex');
+  return expectedSignature === signature;
+}
 
+/**
+ * Verify Razorpay webhook signature — for server-side webhook events.
+ * Uses RAZORPAY_WEBHOOK_SECRET and signs the raw request body.
+ */
+export function verifyWebhookSignature(rawBody: string, signature: string): boolean {
+  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+  if (!webhookSecret) throw new Error('RAZORPAY_WEBHOOK_SECRET is not configured');
+  const expectedSignature = crypto
+    .createHmac('sha256', webhookSecret)
+    .update(rawBody)
+    .digest('hex');
   return expectedSignature === signature;
 }
 

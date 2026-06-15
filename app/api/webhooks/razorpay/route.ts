@@ -1,91 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyPaymentSignature, getPaymentDetails } from '@/lib/payment/razorpay';
-import { confirmBookingPayment, getBooking } from '@/lib/booking/service';
-import { ApiResponse } from '@/lib/types';
+import { verifyWebhookSignature } from '@/lib/payment/razorpay';
 
 /**
  * POST /api/webhooks/razorpay
- * Webhook from Razorpay after successful payment
+ *
+ * Secondary audit endpoint — Razorpay fires this after payment events.
+ * Booking state is already committed atomically by POST /api/bookings/confirm
+ * (called by the frontend after the Razorpay handler callback), so this
+ * handler only verifies the signature and acknowledges receipt.
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { event, payload } = body;
-
-    // Only process payment.authorized and payment.captured events
-    if (!['payment.authorized', 'payment.captured'].includes(event)) {
-      return NextResponse.json({ received: true });
-    }
-
-    const { payment } = payload;
-    const { id: paymentId, order_id: orderId, notes } = payment;
-
-    // Verify signature
+    const rawBody = await request.text();
     const signature = request.headers.get('x-razorpay-signature') || '';
-    const isValid = verifyPaymentSignature(orderId, paymentId, signature);
 
+    const isValid = verifyWebhookSignature(rawBody, signature);
     if (!isValid) {
-      console.error('Invalid Razorpay signature');
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'Invalid signature',
-        } as ApiResponse<null>,
-        { status: 401 }
-      );
+      console.error('[razorpay webhook] Invalid signature — rejected');
+      return NextResponse.json({ success: false, error: 'Invalid signature' }, { status: 401 });
     }
 
-    // Get booking ID from notes
-    const bookingId = notes?.bookingId;
-    if (!bookingId) {
-      console.error('No bookingId in payment notes');
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'Booking ID not found in payment',
-        } as ApiResponse<null>,
-        { status: 400 }
-      );
+    const { event, payload } = JSON.parse(rawBody);
+
+    if (['payment.authorized', 'payment.captured'].includes(event)) {
+      const paymentId = payload?.payment?.entity?.id;
+      const orderId = payload?.payment?.entity?.order_id;
+      const bookingId = payload?.payment?.entity?.notes?.bookingId;
+      console.log(`[razorpay webhook] ${event} — payment ${paymentId}, order ${orderId}, booking ${bookingId}`);
     }
 
-    // Verify booking exists
-    const booking = await getBooking(bookingId);
-    if (!booking) {
-      console.error(`Booking not found: ${bookingId}`);
-      return NextResponse.json(
-        {
-          success: false,
-          error: 'Booking not found',
-        } as ApiResponse<null>,
-        { status: 404 }
-      );
-    }
-
-    // Confirm payment and update booking
-    await confirmBookingPayment(bookingId, paymentId, orderId);
-
-    // Send email notification (optional - integrate with nodemailer/SendGrid)
-    console.log(`✓ Payment confirmed for booking ${bookingId}`);
-    console.log(`  Customer: ${booking.customerEmail}`);
-    console.log(`  Amount: ₹${booking.depositPaid} deposited`);
-    console.log(`  Remaining due: ₹${booking.amountDue}`);
-
-    return NextResponse.json(
-      {
-        success: true,
-        message: 'Payment confirmed',
-        data: { bookingId, status: 'confirmed' },
-      } as ApiResponse<any>,
-      { status: 200 }
-    );
+    return NextResponse.json({ received: true });
   } catch (error) {
-    console.error('Webhook processing error:', error);
-    return NextResponse.json(
-      {
-        success: false,
-        error: 'Failed to process payment',
-      } as ApiResponse<null>,
-      { status: 500 }
-    );
+    console.error('[razorpay webhook] Error:', error);
+    return NextResponse.json({ success: false, error: 'Webhook error' }, { status: 500 });
   }
 }
