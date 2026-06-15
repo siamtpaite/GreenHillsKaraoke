@@ -186,7 +186,11 @@ export default function BookingPage() {
     setCancelLoading(true);
     setError('');
     try {
-      const res = await fetch(`/api/bookings/${bookingData.bookingId}/cancel`, { method: 'POST' });
+      const res = await fetch(`/api/bookings/${bookingData.bookingId}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customerPhone: formData.customerPhone }),
+      });
       const data = await res.json();
       if (data.success) {
         setBookingCancelled(true);

@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cancelBooking, getBooking } from '@/lib/booking/service';
 import { ApiResponse } from '@/lib/types';
-import { sendWhatsAppNotification, formatCustomerJid } from '@/lib/whatsapp/baileys-send';
+import { sendAdminCancellationAlert, sendCustomerCancellationAlert } from '@/lib/whatsapp/twilio-send';
+
+const normalisePhone = (p: string) => p.replace(/\D/g, '').slice(-10);
 
 /**
  * POST /api/bookings/[bookingId]/cancel
- * Cancel a booking and release slots back to availability
+ * Cancel a booking and release slots back to availability.
+ * Requires customerPhone in the request body to prove ownership.
  */
 export async function POST(
   request: NextRequest,
@@ -16,59 +19,52 @@ export async function POST(
 
     if (!bookingId) {
       return NextResponse.json(
-        {
-          success: false,
-          error: 'Booking ID is required',
-        } as ApiResponse<null>,
+        { success: false, error: 'Booking ID is required' } as ApiResponse<null>,
         { status: 400 }
       );
     }
 
-    // Verify booking exists and is cancellable
+    const body = await request.json().catch(() => ({}));
+    const { customerPhone } = body as { customerPhone?: string };
+
+    if (!customerPhone) {
+      return NextResponse.json(
+        { success: false, error: 'customerPhone is required' } as ApiResponse<null>,
+        { status: 400 }
+      );
+    }
+
     const booking = await getBooking(bookingId);
 
     if (!booking) {
       return NextResponse.json(
-        {
-          success: false,
-          error: 'Booking not found',
-        } as ApiResponse<null>,
+        { success: false, error: 'Booking not found' } as ApiResponse<null>,
         { status: 404 }
       );
     }
 
-    // Check if booking can be cancelled
+    // Verify the requester owns this booking
+    if (normalisePhone(customerPhone) !== normalisePhone(booking.customerPhone)) {
+      return NextResponse.json(
+        { success: false, error: 'Phone number does not match booking' } as ApiResponse<null>,
+        { status: 403 }
+      );
+    }
+
     if (['completed', 'cancelled', 'no_show'].includes(booking.status)) {
       return NextResponse.json(
-        {
-          success: false,
-          error: `Booking cannot be cancelled (current status: ${booking.status})`,
-        } as ApiResponse<null>,
+        { success: false, error: `Booking cannot be cancelled (status: ${booking.status})` } as ApiResponse<null>,
         { status: 409 }
       );
     }
 
-    // Cancel the booking (releases slots)
     await cancelBooking(bookingId);
 
-    const waPayload = {
-      bookingId,
-      customerName: booking.customerName,
-      date: booking.date,
-      hours: booking.hours,
-      totalAmount: booking.totalAmount,
-    };
+    sendCustomerCancellationAlert(booking.customerPhone, { date: booking.date, bookingId })
+      .catch((err) => console.error('[Cancel] Customer WA failed:', err));
 
-    // Notify customer
-    sendWhatsAppNotification(
-      { ...waPayload, eventType: 'customer_cancelled' },
-      formatCustomerJid(booking.customerPhone)
-    ).catch((err) => console.error('[Cancel] Customer WA failed:', err));
-
-    // Notify admin group
-    sendWhatsAppNotification(
-      { ...waPayload, eventType: 'cancelled' }
-    ).catch((err) => console.error('[Cancel] Admin WA failed:', err));
+    sendAdminCancellationAlert({ guestName: booking.customerName, date: booking.date, bookingId })
+      .catch((err) => console.error('[Cancel] Admin WA failed:', err));
 
     return NextResponse.json(
       {
@@ -86,10 +82,7 @@ export async function POST(
   } catch (error) {
     console.error('Booking cancellation error:', error);
     return NextResponse.json(
-      {
-        success: false,
-        error: 'Failed to cancel booking',
-      } as ApiResponse<null>,
+      { success: false, error: 'Failed to cancel booking' } as ApiResponse<null>,
       { status: 500 }
     );
   }

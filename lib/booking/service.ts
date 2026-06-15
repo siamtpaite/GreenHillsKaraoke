@@ -1,11 +1,5 @@
-import {
-  doc,
-  serverTimestamp,
-  runTransaction,
-} from 'firebase/firestore';
 import { FieldValue } from 'firebase-admin/firestore';
 import { adminDb } from '../firebase/admin';
-import { db } from '../firebase/config';
 import { Booking, BookingRequest } from '../types';
 import { generateHourList } from '../utils/availability';
 
@@ -26,35 +20,36 @@ export async function lockAndConfirmBooking(
   const hourList = generateHourList(req.startHour, req.hours);
   const totalAmount = HOURLY_RATE * req.hours;
 
-  await runTransaction(db, async (transaction) => {
+  await adminDb.runTransaction(async (transaction) => {
     // 1. Read all slots and fail fast on any conflict
     for (const hour of hourList) {
-      const slotRef = doc(db, `availability/${req.date}/slots/${hour}`);
+      const slotRef = adminDb.doc(`availability/${req.date}/slots/${hour}`);
       const slotSnap = await transaction.get(slotRef);
-      if (slotSnap.exists() && slotSnap.data().status !== 'available') {
+      if (slotSnap.exists && slotSnap.data()?.status !== 'available') {
         throw new Error(`SLOT_CONFLICT: ${req.date} ${hour}:00 is no longer available`);
       }
     }
 
-    // 2. Lock all slots (set covers both existing and initialised-for-first-time docs)
+    // 2. Lock all slots
     for (const hour of hourList) {
-      const slotRef = doc(db, `availability/${req.date}/slots/${hour}`);
+      const slotRef = adminDb.doc(`availability/${req.date}/slots/${hour}`);
       transaction.set(slotRef, {
         status: 'booked',
         bookingId,
-        bookedAt: serverTimestamp(),
+        bookedAt: FieldValue.serverTimestamp(),
         hour: parseInt(hour),
       });
     }
 
     // 3. Create booking as confirmed — deposit already paid
-    const bookingRef = doc(db, `bookings/${bookingId}`);
+    const bookingRef = adminDb.doc(`bookings/${bookingId}`);
     transaction.set(bookingRef, {
       id: bookingId,
       customerName: req.customerName,
       customerEmail: req.customerEmail,
       customerPhone: req.customerPhone,
       date: req.date,
+      startHour: req.startHour,
       hours: req.hours,
       hourList,
       depositPaid: DEPOSIT_AMOUNT,
@@ -63,7 +58,7 @@ export async function lockAndConfirmBooking(
       status: 'confirmed',
       razorpayPaymentId,
       razorpayOrderId,
-      createdAt: serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
     } as Partial<Booking>);
   });
 }

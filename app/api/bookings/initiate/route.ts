@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { initializeSlotsForDate, areHoursAvailable, isBlackoutDate } from '@/lib/utils/availability';
 import { createRazorpayOrder } from '@/lib/payment/razorpay';
 import { adminDb } from '@/lib/firebase/admin';
+import { FieldValue } from 'firebase-admin/firestore';
 import { ApiResponse } from '@/lib/types';
 
 const DEPOSIT_AMOUNT = parseInt(process.env.DEPOSIT_AMOUNT || '500');
@@ -73,6 +74,12 @@ export async function POST(request: NextRequest) {
       customerEmail,
       customerPhone
     );
+
+    // Store order→booking mapping so /confirm can verify the payment belongs to this booking
+    await adminDb.doc(`razorpayOrders/${razorpayOrder.id}`).set({
+      bookingId,
+      createdAt: FieldValue.serverTimestamp(),
+    });
 
     return NextResponse.json(
       {

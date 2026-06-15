@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase/admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { generateHourList } from '@/lib/utils/availability';
-import { sendWhatsAppNotification } from '@/lib/whatsapp/baileys-send';
+import { sendAdminBookingAlert, sendCustomerConfirmation } from '@/lib/whatsapp/twilio-send';
 import { ApiResponse, Booking } from '@/lib/types';
 
 const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '1180');
@@ -81,22 +81,11 @@ export async function POST(req: NextRequest) {
       });
     });
 
-    // Admin group notification
-    sendWhatsAppNotification({
-      bookingId,
-      customerName,
-      date,
-      hours,
-      totalAmount,
-      eventType: 'booking_confirmed',
-    }).catch((err) => console.error('[Manual Booking] Admin WA failed:', err));
+    sendAdminBookingAlert({ guestName: customerName, date, hours, amountDue, bookingId })
+      .catch((err) => console.error('[Manual Booking] Admin WA failed:', err));
 
-    // Customer notification — format phone as WhatsApp JID (Indian +91 prefix)
-    const customerJid = `91${customerPhone.replace(/[^\d]/g, '')}@s.whatsapp.net`;
-    sendWhatsAppNotification(
-      { bookingId, customerName, date, hours, totalAmount, amountDue, eventType: 'customer_booking_confirmed' },
-      customerJid
-    ).catch((err) => console.error('[Manual Booking] Customer WA failed:', err));
+    sendCustomerConfirmation(customerPhone, { date, hours, amountDue, bookingId })
+      .catch((err) => console.error('[Manual Booking] Customer WA failed:', err));
 
     return NextResponse.json(
       { success: true, message: 'Booking created', data: { bookingId } } as ApiResponse<{ bookingId: string }>,

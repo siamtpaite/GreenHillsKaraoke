@@ -4,7 +4,6 @@ const ADMIN_NUMBERS = [
   '+919089402122', // Elvis
   '+918413853992', // Joyful
   '+917085766889', // Siam 1
-  '+918787633291', // Siam 2
 ];
 
 function getClient() {
@@ -125,4 +124,19 @@ export async function sendAdminCancellationAlert(bookingDetails: {
     results.push({ number, ...await sendWhatsAppMessage({ to: number, message }) });
   }
   return results;
+}
+
+export async function sendCustomerCancellationAlert(
+  customerPhone: string,
+  bookingDetails: { date: string; bookingId: string }
+) {
+  const message =
+    `❌ *BOOKING CANCELLED — Green Hills Karaoke*\n\n` +
+    `📅 Date: ${bookingDetails.date}\n` +
+    `🔖 Booking ID: ${bookingDetails.bookingId}\n\n` +
+    `Your ₹500 deposit is non-refundable.\n\n` +
+    `To make a new booking visit our booking page.\n` +
+    `Green Hills Karaoke`;
+
+  return sendWhatsAppMessage({ to: customerPhone, message });
 }

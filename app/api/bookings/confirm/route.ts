@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { lockAndConfirmBooking } from '@/lib/booking/service';
+import { lockAndConfirmBooking, getBooking } from '@/lib/booking/service';
+import { adminDb } from '@/lib/firebase/admin';
 import { verifyPaymentSignature, refundPayment } from '@/lib/payment/razorpay';
 import { sendCustomerConfirmation, sendAdminBookingAlert } from '@/lib/whatsapp/twilio-send';
 import { ApiResponse } from '@/lib/types';
@@ -51,6 +52,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Verify this order was created for this bookingId (prevents payment swap attack)
+    const orderDoc = await adminDb.doc(`razorpayOrders/${razorpay_order_id}`).get();
+    if (!orderDoc.exists || orderDoc.data()?.bookingId !== bookingId) {
+      console.error(`[confirm] Order ${razorpay_order_id} not bound to booking ${bookingId}`);
+      return NextResponse.json(
+        { success: false, error: 'Payment order does not match this booking' } as ApiResponse<null>,
+        { status: 401 }
+      );
+    }
+
     // Atomically check slots, lock them, and create the booking doc
     try {
       await lockAndConfirmBooking(
@@ -61,6 +72,16 @@ export async function POST(request: NextRequest) {
       );
     } catch (err) {
       if (err instanceof Error && err.message.startsWith('SLOT_CONFLICT')) {
+        // Guard against duplicate confirm requests: if this booking is already confirmed
+        // with this same payment, return 200 rather than issuing a spurious refund.
+        const existingBooking = await getBooking(bookingId);
+        if (existingBooking?.status === 'confirmed' && existingBooking.razorpayPaymentId === razorpay_payment_id) {
+          console.log(`[confirm] Duplicate request for ${bookingId} — already confirmed, skipping refund`);
+          return NextResponse.json(
+            { success: true, message: 'Booking confirmed', data: { bookingId, status: 'confirmed' } } as ApiResponse<any>,
+            { status: 200 }
+          );
+        }
         console.warn(`[confirm] Slot conflict for ${bookingId} — issuing refund for ${razorpay_payment_id}`);
         try {
           await refundPayment(razorpay_payment_id);
