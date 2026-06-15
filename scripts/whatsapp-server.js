@@ -93,6 +93,26 @@ app.post('/send', async (req, res) => {
   }
 });
 
+app.post('/send-individual', async (req, res) => {
+  try {
+    const { phone, message } = req.body;
+
+    if (!phone || !message) {
+      return res.status(400).json({ error: 'phone and message are required' });
+    }
+    if (!sock || !isConnected) {
+      return res.status(503).json({ error: 'WhatsApp not connected' });
+    }
+
+    const jid = `${phone}@s.whatsapp.net`;
+    const sentMsg = await sock.sendMessage(jid, { text: message });
+    res.json({ success: true, messageId: sentMsg?.key?.id ?? null });
+  } catch (err) {
+    console.error('[WhatsApp] Send-individual error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 initBaileys()
   .then(() => {
     app.listen(PORT, () => {

@@ -1,90 +1,139 @@
-interface WhatsAppMessage {
-  bookingId: string;
-  customerName: string;
-  date: string;
-  hours: number;
-  totalAmount: number;
-  amountDue?: number;
-  startHour?: number;
-  eventType:
-    | 'booking_confirmed'
-    | 'customer_booking_confirmed'
-    | 'checked_in'
-    | 'checked_out'
-    | 'cancelled'
-    | 'customer_checked_in'
-    | 'customer_checked_out'
-    | 'customer_cancelled'
-    | 'no_show';
+const WHATSAPP_SERVER_URL = process.env.WHATSAPP_SERVER_URL || 'http://152.42.201.75:3001';
+
+const ADMIN_NUMBERS = ['919089402122', '918413853992', '917085766889'];
+
+function toPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, '');
+  return digits.length === 10 ? `91${digits}` : digits;
 }
 
-export function formatCustomerJid(phone: string): string {
-  return `91${phone.replace(/[^\d]/g, '')}@s.whatsapp.net`;
+function fmtDuration(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (m === 0) return `${h} hour${h !== 1 ? 's' : ''}`;
+  if (h === 0) return `${m} min`;
+  return `${h}h ${m}min`;
 }
 
-// The WhatsApp connection lives in a single standalone process
-// (scripts/whatsapp-server.js). The Next.js app must NOT open its own Baileys
-// socket — two connections sharing whatsapp_sessions get "conflict: replaced"
-// and fight forever. Instead we POST to that server over HTTP.
-const WHATSAPP_SERVER_URL =
-  process.env.WHATSAPP_SERVER_URL || 'http://localhost:3001';
-
-/**
- * Send a WhatsApp notification.
- * @param message  Structured event data.
- * @param recipient  Optional JID override (e.g. customer phone JID). Defaults
- *                   to the WHATSAPP_GROUP_CHAT_ID env var.
- */
-export async function sendWhatsAppNotification(message: WhatsAppMessage, recipient?: string) {
-  const chatId = recipient ?? process.env.WHATSAPP_GROUP_CHAT_ID;
-
-  if (!chatId) {
-    console.warn('[WhatsApp] No recipient and WHATSAPP_GROUP_CHAT_ID not set. Skipped:', message);
-    return { success: false, reason: 'No recipient configured' };
-  }
-
-  const text = formatWhatsAppMessage(message);
-
+async function sendIndividual(phone: string, message: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
+  const formatted = toPhone(phone);
+  console.log(`[Baileys] → phone=${formatted} msgLen=${message.length}`);
   try {
-    const res = await fetch(`${WHATSAPP_SERVER_URL}/send`, {
+    const res = await fetch(`${WHATSAPP_SERVER_URL}/send-individual`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ groupId: chatId, message: text }),
+      body: JSON.stringify({ phone: formatted, message }),
     });
-
-    const data = await res.json().catch(() => ({}));
-
-    if (!res.ok) {
-      console.error(`[WhatsApp] Server responded ${res.status}:`, data);
-      return { success: false, reason: data?.error || `HTTP ${res.status}` };
+    const json = await res.json() as { success: boolean; messageId?: string; error?: string };
+    if (json.success) {
+      console.log(`[Baileys] ✓ Sent to ${formatted}, messageId=${json.messageId}`);
+    } else {
+      console.error(`[Baileys] ✗ Failed to ${formatted}:`, json.error);
     }
-
-    console.log(`[WhatsApp] ✅ Sent ${message.eventType} to ${chatId}`);
-    return { success: true, messageId: data?.messageId ?? null };
-  } catch (error) {
-    console.error('[WhatsApp] Could not reach WhatsApp server:', error);
-    return { success: false, reason: 'WhatsApp server unreachable', error };
+    return json;
+  } catch (err: any) {
+    console.error(`[Baileys] ✗ Network error to ${formatted}:`, err.message);
+    return { success: false, error: err.message };
   }
 }
 
-function fmtHourWA(h: number): string {
-  if (h < 12) return `${h}:00 AM`;
-  if (h === 12) return '12:00 PM';
-  return `${h - 12}:00 PM`;
+// Generic send — used by mark-no-shows cron (to: E.164 "+91..." or plain digits)
+export async function sendWhatsAppMessage(options: { to: string; message: string }) {
+  return sendIndividual(options.to, options.message);
 }
 
-function formatWhatsAppMessage(message: WhatsAppMessage): string {
-  const events: Record<WhatsAppMessage['eventType'], string> = {
-    booking_confirmed: `✅ *NEW BOOKING CONFIRMED*\n\n👤 Guest: ${message.customerName}\n📅 Date: ${message.date}\n⏱️ Duration: ${message.hours} hour(s)\n💰 Amount: ₹${message.totalAmount}\n🔖 Booking ID: ${message.bookingId}`,
-    customer_booking_confirmed: `✅ *BOOKING CONFIRMED — Green Hills Karaoke*\n\n📅 Date: ${message.date}\n⏱️ Duration: ${message.hours} hour(s)\n💰 Amount Due at Venue: ₹${message.amountDue ?? message.totalAmount}\n🔖 Booking ID: ${message.bookingId}\n\n⏰ Please arrive 10–15 mins before your slot.\n\n━━━━━━━━━━━━━━━━━━━━\n📋 *RULES & REGULATIONS*\n━━━━━━━━━━━━━━━━━━━━\n1. No outside food or beverages allowed\n2. Alcohol & drugs strictly prohibited\n3. Smoking only in designated outdoor area\n4. Handle microphones & equipment with care\n5. Equipment damage will be charged to the guest\n6. ₹500 deposit is strictly non-refundable\n7. Late arrivals will NOT receive extra time\n8. Extensions subject to availability — request in advance\n9. Minors (under 18) must be accompanied by a parent/guardian\n10. Maintain sound levels within management limits\n11. Respect staff and fellow guests at all times\n12. Misconduct may result in immediate session termination\n13. Management reserves the right to refuse entry or service\n\n🎤 *See you soon — sing your heart out!*\nGreen Hills Karaoke`,
-    checked_in: `✅ *GUEST CHECKED IN*\n\n👤 ${message.customerName}\n📅 ${message.date}\n⏱️ ${message.hours} hour(s)`,
-    checked_out: `🏁 *SESSION COMPLETED*\n\n👤 ${message.customerName}\n💰 Final: ₹${message.totalAmount}`,
-    cancelled: `❌ *BOOKING CANCELLED*\n\n👤 ${message.customerName}\n📅 ${message.date}\n💵 Refund: ₹500 (non-refundable)`,
-    customer_checked_in: `✅ *CHECK-IN CONFIRMED*\n\nWelcome to Green Hills Karaoke!\n📅 ${message.date}\n⏱️ ${message.hours} hour(s)\n🔖 Booking ID: ${message.bookingId}\n\nEnjoy your session! 🎤`,
-    customer_checked_out: `✅ *SESSION COMPLETED*\n\nThank you for visiting Green Hills Karaoke!\n🔖 Booking ID: ${message.bookingId}\n\nSee you again soon! 🎤`,
-    customer_cancelled: `❌ *BOOKING CANCELLED*\n\nYour booking has been cancelled.\n📅 ${message.date}\n💵 Note: ₹500 deposit is non-refundable.\n🔖 Booking ID: ${message.bookingId}`,
-    no_show: `⏰ *NO-SHOW ALERT*\n\n👤 ${message.customerName} didn't show for ${message.date}${message.startHour !== undefined ? ` at ${fmtHourWA(message.startHour)}` : ''}\n🔖 Booking ID: ${message.bookingId}\n💵 ₹500 deposit forfeited`,
-  };
+export async function sendCustomerConfirmation(
+  customerPhone: string,
+  bookingDetails: {
+    date: string;
+    duration: number;
+    balanceDue: number;
+    bookingId: string;
+    paymentType: 'full' | 'deposit';
+  }
+) {
+  const balanceLine =
+    bookingDetails.paymentType === 'full'
+      ? `✅ Fully paid — nothing due at venue`
+      : `💰 Balance Due at Venue: ₹${bookingDetails.balanceDue}`;
 
-  return events[message.eventType];
+  const message =
+    `✅ *BOOKING CONFIRMED — Green Hills Karaoke*\n\n` +
+    `📅 Date: ${bookingDetails.date}\n` +
+    `⏱️ Duration: ${fmtDuration(bookingDetails.duration)}\n` +
+    `${balanceLine}\n` +
+    `🔖 Booking ID: ${bookingDetails.bookingId}\n\n` +
+    `⏰ Please arrive 10–15 mins before your slot.\n\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📋 *RULES & REGULATIONS*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `1. No outside food or beverages allowed\n` +
+    `2. Alcohol & drugs strictly prohibited\n` +
+    `3. Smoking only in designated outdoor area\n` +
+    `4. Handle microphones & equipment with care\n` +
+    `5. Equipment damage will be charged to the guest\n` +
+    `6. ₹50 deposit is strictly non-refundable\n` +
+    `7. Late arrivals will NOT receive extra time\n` +
+    `8. Extensions subject to availability — request in advance\n` +
+    `9. Minors (under 18) must be accompanied by a parent/guardian\n` +
+    `10. Maintain sound levels within management limits\n` +
+    `11. Respect staff and fellow guests at all times\n` +
+    `12. Misconduct may result in immediate session termination\n` +
+    `13. Management reserves the right to refuse entry or service\n\n` +
+    `🎤 *See you soon — sing your heart out!*\nGreen Hills Karaoke`;
+
+  return sendIndividual(customerPhone, message);
+}
+
+export async function sendAdminBookingAlert(bookingDetails: {
+  guestName: string;
+  date: string;
+  duration: number;
+  balanceDue: number;
+  bookingId: string;
+  paymentType: 'full' | 'deposit';
+}) {
+  const paymentLine =
+    bookingDetails.paymentType === 'full'
+      ? `Payment: FULL (₹0 due at venue)`
+      : `Payment: DEPOSIT — ₹${bookingDetails.balanceDue} due at venue`;
+
+  const message =
+    `[BOOKING ALERT] 🎤\n` +
+    `Guest: ${bookingDetails.guestName}\n` +
+    `Date: ${bookingDetails.date}\n` +
+    `Duration: ${fmtDuration(bookingDetails.duration)}\n` +
+    `${paymentLine}\n` +
+    `Booking ID: ${bookingDetails.bookingId}`;
+
+  return Promise.all(ADMIN_NUMBERS.map((n) => sendIndividual(n, message)));
+}
+
+export async function sendAdminCancellationAlert(bookingDetails: {
+  guestName: string;
+  date: string;
+  bookingId: string;
+}) {
+  const message =
+    `[CANCELLATION ALERT] ❌\n` +
+    `Guest: ${bookingDetails.guestName}\n` +
+    `Date: ${bookingDetails.date}\n` +
+    `Booking ID: ${bookingDetails.bookingId}`;
+
+  return Promise.all(ADMIN_NUMBERS.map((n) => sendIndividual(n, message)));
+}
+
+export async function sendCustomerCancellationAlert(
+  customerPhone: string,
+  bookingDetails: { date: string; bookingId: string }
+) {
+  const message =
+    `❌ *BOOKING CANCELLED — Green Hills Karaoke*\n\n` +
+    `📅 Date: ${bookingDetails.date}\n` +
+    `🔖 Booking ID: ${bookingDetails.bookingId}\n\n` +
+    `Your ₹50 deposit is non-refundable.\n\n` +
+    `To make a new booking visit our booking page.\n` +
+    `Green Hills Karaoke`;
+
+  return sendIndividual(customerPhone, message);
 }

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase/admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { isTimeRangeAvailable } from '@/lib/utils/availability';
-import { sendAdminBookingAlert, sendCustomerConfirmation } from '@/lib/whatsapp/twilio-send';
+import { sendAdminBookingAlert, sendCustomerConfirmation } from '@/lib/whatsapp/baileys-send';
 import { ApiResponse, Booking } from '@/lib/types';
 
 const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '50');

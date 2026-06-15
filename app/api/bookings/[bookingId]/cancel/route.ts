@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { cancelBooking, getBooking } from '@/lib/booking/service';
 import { ApiResponse } from '@/lib/types';
-import { sendAdminCancellationAlert, sendCustomerCancellationAlert } from '@/lib/whatsapp/twilio-send';
+import { sendAdminCancellationAlert, sendCustomerCancellationAlert } from '@/lib/whatsapp/baileys-send';
 
 const normalisePhone = (p: string) => p.replace(/\D/g, '').slice(-10);
 

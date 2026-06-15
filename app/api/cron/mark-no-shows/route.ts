@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase/admin';
 import { FieldValue } from 'firebase-admin/firestore';
-import { sendWhatsAppMessage } from '@/lib/whatsapp/twilio-send';
+import { sendWhatsAppMessage } from '@/lib/whatsapp/baileys-send';
 
 const ADMIN_NUMBERS = ['+919089402122', '+918413853992', '+917085766889'];
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'GreenHills2021';

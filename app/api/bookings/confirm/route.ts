@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { lockAndConfirmBooking, getBooking } from '@/lib/booking/service';
 import { adminDb } from '@/lib/firebase/admin';
 import { verifyPaymentSignature, refundPayment } from '@/lib/payment/razorpay';
-import { sendCustomerConfirmation, sendAdminBookingAlert } from '@/lib/whatsapp/twilio-send';
+import { sendCustomerConfirmation, sendAdminBookingAlert } from '@/lib/whatsapp/baileys-send';
 import { ApiResponse } from '@/lib/types';
 
 const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '50');

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase/admin';
-import { sendAdminCancellationAlert, sendCustomerCancellationAlert } from '@/lib/whatsapp/twilio-send';
+import { sendAdminCancellationAlert, sendCustomerCancellationAlert } from '@/lib/whatsapp/baileys-send';
 import { FieldValue } from 'firebase-admin/firestore';
 
 export async function POST(
