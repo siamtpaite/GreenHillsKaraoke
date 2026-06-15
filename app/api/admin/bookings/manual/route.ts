@@ -97,9 +97,9 @@ export async function POST(req: NextRequest) {
       });
     });
 
-    sendAdminBookingAlert({ guestName: customerName, date, duration, balanceDue, bookingId, paymentType: resolvedPaymentType })
+    sendAdminBookingAlert({ guestName: customerName, customerPhone, date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType })
       .catch((err) => console.error('[Manual Booking] Admin WA failed:', err));
-    sendCustomerConfirmation(customerPhone, { date, duration, balanceDue, bookingId, paymentType: resolvedPaymentType })
+    sendCustomerConfirmation(customerPhone, { date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType })
       .catch((err) => console.error('[Manual Booking] Customer WA failed:', err));
 
     return NextResponse.json(

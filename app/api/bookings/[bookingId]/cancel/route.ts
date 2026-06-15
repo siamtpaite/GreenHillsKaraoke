@@ -62,8 +62,8 @@ export async function POST(
 
     // Await both — in serverless, fire-and-forget can be killed before completion
     const [customerResult, adminResult] = await Promise.allSettled([
-      sendCustomerCancellationAlert(booking.customerPhone, { date: booking.date, bookingId }),
-      sendAdminCancellationAlert({ guestName: booking.customerName, date: booking.date, bookingId }),
+      sendCustomerCancellationAlert(booking.customerPhone, { date: booking.date, startTime: booking.startTime, duration: booking.duration, bookingId }),
+      sendAdminCancellationAlert({ guestName: booking.customerName, customerPhone: booking.customerPhone, date: booking.date, startTime: booking.startTime, duration: booking.duration, paymentType: booking.paymentType, bookingId }),
     ]);
 
     if (customerResult.status === 'rejected') {

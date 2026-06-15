@@ -15,6 +15,14 @@ function fmtDuration(minutes: number): string {
   return `${h}h ${m}min`;
 }
 
+function fmtTime(minutesFromMidnight: number): string {
+  const h = Math.floor(minutesFromMidnight / 60) % 24;
+  const m = minutesFromMidnight % 60;
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 || 12;
+  return `${h12}:${m.toString().padStart(2, '0')} ${ampm}`;
+}
+
 async function sendIndividual(phone: string, message: string): Promise<{ success: boolean; messageId?: string; error?: string }> {
   const formatted = toPhone(phone);
   console.log(`[Baileys] → phone=${formatted} msgLen=${message.length}`);
@@ -46,33 +54,36 @@ export async function sendCustomerConfirmation(
   customerPhone: string,
   bookingDetails: {
     date: string;
+    startTime: number;
     duration: number;
     balanceDue: number;
     bookingId: string;
     paymentType: 'full' | 'deposit';
   }
 ) {
-  const balanceLine =
+  const endTime = bookingDetails.startTime + bookingDetails.duration;
+  const paymentStatus =
     bookingDetails.paymentType === 'full'
       ? `✅ Fully paid — nothing due at venue`
       : `💰 Balance Due at Venue: ₹${bookingDetails.balanceDue}`;
 
   const message =
-    `✅ *BOOKING CONFIRMED — Green Hills Karaoke*\n\n` +
+    `✅ BOOKING CONFIRMED — Green Hills Karaoke\n` +
     `📅 Date: ${bookingDetails.date}\n` +
+    `⏰ Time: ${fmtTime(bookingDetails.startTime)} – ${fmtTime(endTime)}\n` +
     `⏱️ Duration: ${fmtDuration(bookingDetails.duration)}\n` +
-    `${balanceLine}\n` +
+    `${paymentStatus}\n` +
     `🔖 Booking ID: ${bookingDetails.bookingId}\n\n` +
     `⏰ Please arrive 10–15 mins before your slot.\n\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
-    `📋 *RULES & REGULATIONS*\n` +
+    `📋 RULES & REGULATIONS\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `1. No outside food or beverages allowed\n` +
     `2. Alcohol & drugs strictly prohibited\n` +
     `3. Smoking only in designated outdoor area\n` +
     `4. Handle microphones & equipment with care\n` +
     `5. Equipment damage will be charged to the guest\n` +
-    `6. ₹50 deposit is strictly non-refundable\n` +
+    `6. Deposit is strictly non-refundable\n` +
     `7. Late arrivals will NOT receive extra time\n` +
     `8. Extensions subject to availability — request in advance\n` +
     `9. Minors (under 18) must be accompanied by a parent/guardian\n` +
@@ -80,59 +91,76 @@ export async function sendCustomerConfirmation(
     `11. Respect staff and fellow guests at all times\n` +
     `12. Misconduct may result in immediate session termination\n` +
     `13. Management reserves the right to refuse entry or service\n\n` +
-    `🎤 *See you soon — sing your heart out!*\nGreen Hills Karaoke`;
+    `🎤 See you soon — sing your heart out!\n` +
+    `Green Hills Karaoke`;
 
   return sendIndividual(customerPhone, message);
 }
 
 export async function sendAdminBookingAlert(bookingDetails: {
   guestName: string;
+  customerPhone: string;
   date: string;
+  startTime: number;
   duration: number;
   balanceDue: number;
   bookingId: string;
   paymentType: 'full' | 'deposit';
 }) {
-  const paymentLine =
+  const endTime = bookingDetails.startTime + bookingDetails.duration;
+  const paymentStatus =
     bookingDetails.paymentType === 'full'
-      ? `Payment: FULL (₹0 due at venue)`
-      : `Payment: DEPOSIT — ₹${bookingDetails.balanceDue} due at venue`;
+      ? `FULL — ₹0 due at venue`
+      : `DEPOSIT — ₹${bookingDetails.balanceDue} due at venue`;
 
   const message =
-    `[BOOKING ALERT] 🎤\n` +
-    `Guest: ${bookingDetails.guestName}\n` +
-    `Date: ${bookingDetails.date}\n` +
-    `Duration: ${fmtDuration(bookingDetails.duration)}\n` +
-    `${paymentLine}\n` +
-    `Booking ID: ${bookingDetails.bookingId}`;
+    `🔔 NEW BOOKING — Green Hills Karaoke\n` +
+    `👤 Guest: ${bookingDetails.guestName}\n` +
+    `📅 Date: ${bookingDetails.date}\n` +
+    `⏰ Time: ${fmtTime(bookingDetails.startTime)} – ${fmtTime(endTime)}\n` +
+    `⏱️ Duration: ${fmtDuration(bookingDetails.duration)}\n` +
+    `💳 Payment: ${paymentStatus}\n` +
+    `📞 Phone: ${bookingDetails.customerPhone}\n` +
+    `🔖 Booking ID: ${bookingDetails.bookingId}`;
 
   return Promise.all(ADMIN_NUMBERS.map((n) => sendIndividual(n, message)));
 }
 
 export async function sendAdminCancellationAlert(bookingDetails: {
   guestName: string;
+  customerPhone: string;
   date: string;
+  startTime: number;
+  duration: number;
+  paymentType: 'full' | 'deposit';
   bookingId: string;
 }) {
+  const endTime = bookingDetails.startTime + bookingDetails.duration;
   const message =
-    `[CANCELLATION ALERT] ❌\n` +
-    `Guest: ${bookingDetails.guestName}\n` +
-    `Date: ${bookingDetails.date}\n` +
-    `Booking ID: ${bookingDetails.bookingId}`;
+    `🚫 BOOKING CANCELLED — Green Hills Karaoke\n` +
+    `👤 Guest: ${bookingDetails.guestName}\n` +
+    `📅 Date: ${bookingDetails.date}\n` +
+    `⏰ Time: ${fmtTime(bookingDetails.startTime)} – ${fmtTime(endTime)}\n` +
+    `💳 Payment type: ${bookingDetails.paymentType}\n` +
+    `📞 Phone: ${bookingDetails.customerPhone}\n` +
+    `🔖 Booking ID: ${bookingDetails.bookingId}`;
 
   return Promise.all(ADMIN_NUMBERS.map((n) => sendIndividual(n, message)));
 }
 
 export async function sendCustomerCancellationAlert(
   customerPhone: string,
-  bookingDetails: { date: string; bookingId: string }
+  bookingDetails: { date: string; startTime: number; duration: number; bookingId: string }
 ) {
+  const endTime = bookingDetails.startTime + bookingDetails.duration;
   const message =
-    `❌ *BOOKING CANCELLED — Green Hills Karaoke*\n\n` +
+    `❌ BOOKING CANCELLED — Green Hills Karaoke\n` +
+    `🔖 Booking ID: ${bookingDetails.bookingId}\n` +
     `📅 Date: ${bookingDetails.date}\n` +
-    `🔖 Booking ID: ${bookingDetails.bookingId}\n\n` +
-    `Your ₹50 deposit is non-refundable.\n\n` +
-    `To make a new booking visit our booking page.\n` +
+    `⏰ Time: ${fmtTime(bookingDetails.startTime)} – ${fmtTime(endTime)}\n` +
+    `⏱️ Duration: ${fmtDuration(bookingDetails.duration)}\n` +
+    `💰 Note: Deposit is non-refundable\n` +
+    `To rebook, visit: https://greenhillsagro.net/karaoke\n` +
     `Green Hills Karaoke`;
 
   return sendIndividual(customerPhone, message);

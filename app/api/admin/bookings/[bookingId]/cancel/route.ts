@@ -32,8 +32,8 @@ export async function POST(
     });
 
     const [customerResult, adminResult] = await Promise.allSettled([
-      sendCustomerCancellationAlert(booking.customerPhone, { date: booking.date, bookingId }),
-      sendAdminCancellationAlert({ guestName: booking.customerName, date: booking.date, bookingId }),
+      sendCustomerCancellationAlert(booking.customerPhone, { date: booking.date, startTime: booking.startTime, duration: booking.duration, bookingId }),
+      sendAdminCancellationAlert({ guestName: booking.customerName, customerPhone: booking.customerPhone, date: booking.date, startTime: booking.startTime, duration: booking.duration, paymentType: booking.paymentType, bookingId }),
     ]);
     if (customerResult.status === 'rejected') console.error('[Admin Cancel] Customer WA failed:', customerResult.reason);
     if (adminResult.status === 'rejected') console.error('[Admin Cancel] Admin WA failed:', adminResult.reason);

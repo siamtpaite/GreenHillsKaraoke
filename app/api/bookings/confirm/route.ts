@@ -102,9 +102,9 @@ export async function POST(request: NextRequest) {
 
     console.log(`[confirm] Sending WhatsApp to customer=${customerPhone} admins=3 bookingId=${bookingId}`);
     await Promise.all([
-      sendCustomerConfirmation(customerPhone, { date, duration, balanceDue, bookingId, paymentType })
+      sendCustomerConfirmation(customerPhone, { date, startTime, duration, balanceDue, bookingId, paymentType })
         .catch((e) => console.error('[confirm] Customer WA failed:', e)),
-      sendAdminBookingAlert({ guestName: customerName, date, duration, balanceDue, bookingId, paymentType })
+      sendAdminBookingAlert({ guestName: customerName, customerPhone, date, startTime, duration, balanceDue, bookingId, paymentType })
         .catch((e) => console.error('[confirm] Admin WA failed:', e)),
     ]);
 
