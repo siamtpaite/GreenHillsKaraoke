@@ -84,7 +84,8 @@ export async function sendCustomerConfirmation(
     `Call or message any of our admins:\n` +
     `📞 +91 90894 02122\n` +
     `📞 +91 7085766889\n` +
-    `📞 +91 84138 53992\n\n` +
+    `📞 +91 84138 53992\n` +
+    `📞 +918787633291\n\n` +
     `Cancellations processed within 24 hours.\n` +
     `Thank you for booking with GreenHills Karaoke! 🎤`;
 
