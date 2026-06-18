@@ -5,7 +5,7 @@ import { isTimeRangeAvailable } from '@/lib/utils/availability';
 import { sendAdminBookingAlert, sendCustomerConfirmation } from '@/lib/whatsapp/baileys-send';
 import { ApiResponse, Booking } from '@/lib/types';
 
-const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '50');
+const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '1180');
 const DEPOSIT_AMOUNT = parseInt(process.env.NEXT_PUBLIC_DEPOSIT_AMOUNT || '500');
 
 // Admin sessions run 10 AM – midnight (600–1440 min)

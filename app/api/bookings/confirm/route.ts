@@ -6,7 +6,7 @@ import { verifyPaymentSignature, refundPayment } from '@/lib/payment/razorpay';
 import { sendCustomerConfirmation, sendAdminBookingAlert } from '@/lib/whatsapp/baileys-send';
 import { ApiResponse } from '@/lib/types';
 
-const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '50');
+const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '1180');
 const DEPOSIT_AMOUNT = parseInt(process.env.NEXT_PUBLIC_DEPOSIT_AMOUNT || '500');
 
 /**
