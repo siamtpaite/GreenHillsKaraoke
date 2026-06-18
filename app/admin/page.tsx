@@ -404,26 +404,31 @@ export default function AdminDashboard() {
 
       <div className="max-w-6xl mx-auto relative z-10">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-pink-300" style={{ textShadow: '0 0 20px rgba(0,217,255,0.4)' }}>BOOKING CONTROL</h1>
-            <p className="text-cyan-300/50 mt-1 text-sm">Manage sessions</p>
+        <div className="flex items-center gap-4 mb-8">
+          <Image src="/logo.png" alt="Green Hills Karaoke" width={52} height={52} className="opacity-90 shrink-0" style={{ filter: 'drop-shadow(0 0 16px rgba(34,197,94,0.5))' }} />
+          <div className="flex-1 min-w-0">
+            <h1 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-pink-300">ADMIN CONTROL</h1>
+            <p className="text-cyan-300/40 text-xs mt-0.5 uppercase tracking-widest">Green Hills Karaoke · Booking Dashboard</p>
           </div>
           <button onClick={() => setAuthenticated(false)}
-            className="bg-slate-800/50 border border-slate-600 text-cyan-300 px-4 py-2 rounded-lg hover:border-slate-500 text-sm">
+            className="shrink-0 bg-slate-800/50 border border-slate-600 text-cyan-300/80 px-4 py-2 rounded-lg hover:border-cyan-500/50 hover:text-cyan-300 text-sm transition-all">
             🚪 Logout
           </button>
         </div>
 
-        {/* Tabs */}
-        <div className="mb-6 flex gap-2 flex-wrap">
-          {(['bookings','analytics','blackout'] as AdminTab[]).map(tab => (
-            <button key={tab} onClick={() => setActiveTab(tab)}
-              className={`px-5 py-2 rounded-lg font-bold text-sm transition-all ${activeTab === tab ? 'bg-gradient-to-r from-cyan-500 to-pink-500 text-white shadow-lg shadow-cyan-500/30' : 'bg-slate-800/50 border border-slate-600 text-cyan-300/60 hover:border-slate-500'}`}>
-              {tab === 'bookings' ? '📋 Bookings' : tab === 'analytics' ? '📊 Analytics' : '🚫 Blackout Dates'}
-            </button>
-          ))}
-        </div>
+        {/* Main card */}
+        <div className="backdrop-blur-xl bg-slate-900/40 border border-cyan-400/20 rounded-2xl shadow-2xl shadow-cyan-400/5">
+          {/* Tabs */}
+          <div className="flex gap-2 flex-wrap px-5 pt-5 pb-4 border-b border-slate-700/50">
+            {(['bookings','analytics','blackout'] as AdminTab[]).map(tab => (
+              <button key={tab} onClick={() => setActiveTab(tab)}
+                className={`px-5 py-2 rounded-lg font-bold text-sm transition-all ${activeTab === tab ? 'bg-gradient-to-r from-cyan-500 to-pink-500 text-white shadow-lg shadow-cyan-500/30' : 'bg-slate-800/50 border border-slate-600/60 text-cyan-300/70 hover:border-slate-500 hover:text-cyan-300'}`}>
+                {tab === 'bookings' ? '📋 Bookings' : tab === 'analytics' ? '📊 Analytics' : '🚫 Blackout Dates'}
+              </button>
+            ))}
+          </div>
+
+          <div className="p-5">
 
         {/* ── BOOKINGS TAB ── */}
         {activeTab === 'bookings' && (
@@ -680,6 +685,9 @@ export default function AdminDashboard() {
             </div>
           </div>
         )}
+
+          </div>{/* /p-5 */}
+        </div>{/* /main card */}
       </div>
 
       {/* ── OFFLINE BOOKING MODAL ── */}
