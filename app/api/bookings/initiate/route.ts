@@ -6,7 +6,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { ApiResponse } from '@/lib/types';
 
 const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '50');
-const DEPOSIT_AMOUNT = parseInt(process.env.DEPOSIT_AMOUNT || '50');
+const DEPOSIT_AMOUNT = parseInt(process.env.NEXT_PUBLIC_DEPOSIT_AMOUNT || '500');
 const MIN_DURATION = 30;   // minutes
 const MAX_DURATION = 480;  // minutes (8 hours)
 

@@ -3,7 +3,7 @@ import { adminDb } from '../firebase/admin';
 import { Booking, BookingRequest } from '../types';
 
 const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '50');
-const DEPOSIT_AMOUNT = parseInt(process.env.DEPOSIT_AMOUNT || '50');
+const DEPOSIT_AMOUNT = parseInt(process.env.NEXT_PUBLIC_DEPOSIT_AMOUNT || '500');
 
 function computePaymentAmounts(paymentType: 'full' | 'deposit', totalAmount: number) {
   if (paymentType === 'full') return { paidAmount: totalAmount, balanceDue: 0 };
