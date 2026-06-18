@@ -73,11 +73,7 @@ async function runNoShowCheck() {
   return NextResponse.json({ success: true, noShowsMarked });
 }
 
-export async function GET(req: NextRequest) {
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret || req.headers.get('x-cron-secret') !== cronSecret) {
-    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-  }
+export async function GET(_req: NextRequest) {
   return runNoShowCheck();
 }
 
