@@ -25,8 +25,8 @@ const DURATION_OPTS = [
   { label: '6 hr',   value: 360 },
 ];
 
-const RATE = 50;
-const DEPOSIT = 50;
+const RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '1180');
+const DEPOSIT = parseInt(process.env.NEXT_PUBLIC_DEPOSIT_AMOUNT || '500');
 
 function minutesToTime(min: number): string {
   if (min >= 1440) return '12:00 AM';
@@ -143,7 +143,7 @@ export default function BookingPage() {
   };
 
   const handleCancelBooking = async () => {
-    if (!confirm('⚠️ Cancellation will forfeit your ₹50 non-refundable deposit. Continue?')) return;
+    if (!confirm(`⚠️ Cancellation will forfeit your ₹${DEPOSIT} non-refundable deposit. Continue?`)) return;
     setCancelLoading(true);
     try {
       const res = await fetch(`/api/bookings/${bookingData.bookingId}/cancel`, {
@@ -404,6 +404,30 @@ export default function BookingPage() {
                 <div className="flex justify-between border-t border-slate-700/60 pt-2 mt-1">
                   <span className="text-slate-400">Total</span>
                   <span className="text-xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-violet-300">₹{totalAmount.toLocaleString()}</span>
+                </div>
+              </div>
+
+              {/* Refund Policy */}
+              <div className="bg-slate-800/40 border border-yellow-400/25 rounded-xl p-5 space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-base">📋</span>
+                  <h3 className="text-yellow-300 font-black text-sm uppercase tracking-wider">Refund Policy</h3>
+                </div>
+                <div className="space-y-3 text-sm">
+                  <div>
+                    <p className="text-white font-bold">₹500 Deposit (Non-Refundable)</p>
+                    <p className="text-slate-400 mt-1">Your ₹500 deposit <span className="text-yellow-300 font-bold">LOCKS</span> your booking slot and is <span className="text-red-400 font-bold">NON-REFUNDABLE</span> under all circumstances — even if you cancel.</p>
+                  </div>
+                  <div>
+                    <p className="text-white font-bold">Remaining Amount (Discretionary Refund)</p>
+                    <p className="text-slate-400 mt-1">If you pay the full booking amount, the remaining balance will be refunded at admin discretion based on your cancellation reason:</p>
+                    <ul className="mt-2 space-y-1 text-slate-400">
+                      <li className="flex gap-2"><span className="text-red-400">✗</span><span>Same-day or no-show cancellation → No refund</span></li>
+                      <li className="flex gap-2"><span className="text-yellow-300">◐</span><span>24+ hours advance notice → Refund at admin discretion</span></li>
+                      <li className="flex gap-2"><span className="text-green-400">✓</span><span>Valid reason (emergency, illness, etc.) → Higher refund likelihood</span></li>
+                    </ul>
+                  </div>
+                  <p className="text-slate-500 text-xs border-t border-slate-700/60 pt-3">By proceeding to payment, you agree to this policy.</p>
                 </div>
               </div>
 

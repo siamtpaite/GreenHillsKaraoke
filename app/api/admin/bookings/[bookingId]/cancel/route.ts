@@ -7,6 +7,10 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ bookingId: string }> }
 ) {
+  const pw = process.env.ADMIN_PASSWORD;
+  if (!pw || req.headers.get('x-admin-password') !== pw) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const { bookingId } = await params;
 
@@ -31,10 +35,12 @@ export async function POST(
       cancelledAt: FieldValue.serverTimestamp(),
     });
 
-    console.log(`[Admin Cancel] Sending WA — bookingId=${bookingId} phone=${booking.customerPhone} date=${booking.date} startTime=${booking.startTime} duration=${booking.duration}`);
+    const resolvedStart = booking.startTime ?? booking.startMinute ?? (booking.startHour != null ? booking.startHour * 60 : 0);
+    const resolvedDuration = booking.duration ?? (booking.hours != null ? booking.hours * 60 : 60);
+    console.log(`[Admin Cancel] Sending WA — bookingId=${bookingId} phone=${booking.customerPhone} date=${booking.date} startTime=${resolvedStart} duration=${resolvedDuration}`);
     const [customerResult, adminResult] = await Promise.allSettled([
-      sendCustomerCancellationAlert(booking.customerPhone, { date: booking.date, startTime: booking.startTime, duration: booking.duration, bookingId }),
-      sendAdminCancellationAlert({ guestName: booking.customerName, customerPhone: booking.customerPhone, date: booking.date, startTime: booking.startTime, duration: booking.duration, paymentType: booking.paymentType, bookingId }),
+      sendCustomerCancellationAlert(booking.customerPhone, { date: booking.date, startTime: resolvedStart, duration: resolvedDuration, bookingId }),
+      sendAdminCancellationAlert({ guestName: booking.customerName, customerPhone: booking.customerPhone, date: booking.date, startTime: resolvedStart, duration: resolvedDuration, paymentType: booking.paymentType, bookingId }),
     ]);
     const cVal = customerResult.status === 'fulfilled' ? customerResult.value : null;
     const aVal = adminResult.status === 'fulfilled' ? adminResult.value : null;

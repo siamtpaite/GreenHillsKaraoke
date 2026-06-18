@@ -7,6 +7,10 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ bookingId: string }> }
 ) {
+  const pw = process.env.ADMIN_PASSWORD;
+  if (!pw || req.headers.get('x-admin-password') !== pw) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const { bookingId } = await params;
 

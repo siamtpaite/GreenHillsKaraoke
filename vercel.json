@@ -2,7 +2,10 @@
   "crons": [
     {
       "path": "/api/cron/mark-no-shows",
-      "schedule": "0 23 * * *"
+      "schedule": "0 23 * * *",
+      "headers": {
+        "x-cron-secret": "@cron_secret"
+      }
     }
   ]
 }

@@ -11,15 +11,13 @@ const DEFAULT_STALE_MINUTES = 60;
  * customer never completed payment so /api/bookings/confirm was never called).
  */
 export async function POST(req: NextRequest) {
+  const pw = process.env.ADMIN_PASSWORD;
+  if (!pw || req.headers.get('x-admin-password') !== pw) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
   try {
-    const body = await req.json();
-    const adminPassword = process.env.ADMIN_PASSWORD;
-
-    if (!adminPassword || body.password !== adminPassword) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const staleMinutes: number = body.staleMinutes ?? DEFAULT_STALE_MINUTES;
+    const body = await req.json().catch(() => ({}));
+    const staleMinutes: number = (body as any).staleMinutes ?? DEFAULT_STALE_MINUTES;
     const cutoff = Timestamp.fromDate(new Date(Date.now() - staleMinutes * 60 * 1000));
 
     const snapshot = await adminDb

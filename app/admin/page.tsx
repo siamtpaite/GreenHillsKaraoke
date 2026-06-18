@@ -4,7 +4,8 @@ import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
-const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE ?? '50');
+const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE ?? '1180');
+const DEPOSIT_AMOUNT = parseInt(process.env.NEXT_PUBLIC_DEPOSIT_AMOUNT ?? '500');
 
 // Admin timeline: 10 AM – midnight
 const ADMIN_START = 600;   // 10:00
@@ -152,18 +153,33 @@ export default function AdminDashboard() {
   const [blackoutForm, setBlackoutForm] = useState<BlackoutForm>({ startDate: '', endDate: '', reason: '' });
   const [blackoutSubmitting, setBlackoutSubmitting] = useState(false);
   const [blackoutError, setBlackoutError] = useState('');
+  const [adminToken, setAdminToken] = useState('');
 
-  const ADMIN_PASSWORD = 'GreenHills2021';
-
-  const handleLogin = () => {
-    if (password === ADMIN_PASSWORD) { setAuthenticated(true); setPassword(''); fetchBookings(); }
-    else setError('Invalid password');
+  const handleLogin = async () => {
+    if (!password.trim()) { setError('Enter admin password'); return; }
+    try {
+      const res = await fetch(`/api/admin/bookings?date=${selectedDate}`, {
+        headers: { 'x-admin-password': password },
+      });
+      if (res.status === 401) { setError('Invalid password'); return; }
+      const data = await res.json();
+      if (data.success) {
+        setAdminToken(password);
+        setAuthenticated(true);
+        setBookings(data.data);
+      } else {
+        setError('Authentication failed');
+      }
+    } catch { setError('Network error'); }
+    setPassword('');
   };
 
-  const fetchBookings = async (date?: string) => {
+  const fetchBookings = async (date?: string, token?: string) => {
     setLoading(true); setError('');
     try {
-      const res = await fetch(`/api/admin/bookings?date=${date ?? selectedDate}`);
+      const res = await fetch(`/api/admin/bookings?date=${date ?? selectedDate}`, {
+        headers: { 'x-admin-password': token ?? adminToken },
+      });
       const data = await res.json();
       if (data.success) setBookings(data.data);
       else setError('Failed to fetch bookings');
@@ -173,7 +189,9 @@ export default function AdminDashboard() {
 
   const fetchFormBookings = async (date: string) => {
     try {
-      const res = await fetch(`/api/admin/bookings?date=${date}`);
+      const res = await fetch(`/api/admin/bookings?date=${date}`, {
+        headers: { 'x-admin-password': adminToken },
+      });
       const data = await res.json();
       if (data.success) setFormBookings(data.data);
     } catch {}
@@ -182,7 +200,9 @@ export default function AdminDashboard() {
   const fetchBlackoutDates = async () => {
     setBlackoutLoading(true);
     try {
-      const res = await fetch('/api/admin/blackout-dates');
+      const res = await fetch('/api/admin/blackout-dates', {
+        headers: { 'x-admin-password': adminToken },
+      });
       const data = await res.json();
       if (data.success) setBlackoutDates(data.data);
     } catch {}
@@ -192,7 +212,9 @@ export default function AdminDashboard() {
   const fetchAnalytics = async (period: AnalyticsPeriod = analyticsPeriod) => {
     setAnalyticsLoading(true);
     try {
-      const res = await fetch(`/api/admin/analytics?period=${period}`);
+      const res = await fetch(`/api/admin/analytics?period=${period}`, {
+        headers: { 'x-admin-password': adminToken },
+      });
       const data = await res.json();
       if (data.success) setAnalytics(data.data);
     } catch {}
@@ -214,8 +236,9 @@ export default function AdminDashboard() {
     setBlackoutSubmitting(true); setBlackoutError('');
     try {
       const res = await fetch('/api/admin/blackout-dates', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: ADMIN_PASSWORD, dates }),
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-admin-password': adminToken },
+        body: JSON.stringify({ dates }),
       });
       const data = await res.json();
       if (!data.success) { setBlackoutError(data.error ?? 'Failed to block dates'); return; }
@@ -229,8 +252,8 @@ export default function AdminDashboard() {
     if (!confirm(`Unblock ${fmtDate(date)}?`)) return;
     try {
       const res = await fetch(`/api/admin/blackout-dates/${date}`, {
-        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password: ADMIN_PASSWORD }),
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', 'x-admin-password': adminToken },
       });
       const data = await res.json();
       if (data.success) fetchBlackoutDates(); else setBlackoutError(data.error ?? 'Failed to unblock date');
@@ -293,7 +316,7 @@ export default function AdminDashboard() {
       };
       const res = await fetch('/api/admin/bookings/manual', {
         method: editingBooking ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-admin-password': adminToken },
         body: JSON.stringify(payload),
       });
       const data = await res.json();
@@ -307,7 +330,9 @@ export default function AdminDashboard() {
 
   const handleCheckIn = async (bookingId: string) => {
     try {
-      const res = await fetch(`/api/admin/bookings/${bookingId}/checkin`, { method: 'POST' });
+      const res = await fetch(`/api/admin/bookings/${bookingId}/checkin`, {
+        method: 'POST', headers: { 'x-admin-password': adminToken },
+      });
       const data = await res.json();
       if (data.success) fetchBookings(); else setError('Check-in failed');
     } catch { setError('Error checking in'); }
@@ -315,16 +340,20 @@ export default function AdminDashboard() {
 
   const handleCheckOut = async (bookingId: string) => {
     try {
-      const res = await fetch(`/api/admin/bookings/${bookingId}/checkout`, { method: 'POST' });
+      const res = await fetch(`/api/admin/bookings/${bookingId}/checkout`, {
+        method: 'POST', headers: { 'x-admin-password': adminToken },
+      });
       const data = await res.json();
       if (data.success) fetchBookings(); else setError('Check-out failed');
     } catch { setError('Error checking out'); }
   };
 
   const handleCancel = async (bookingId: string) => {
-    if (!confirm('⚠️ Cancel this booking? Guest loses ₹50 non-refundable deposit. Continue?')) return;
+    if (!confirm(`⚠️ Cancel this booking? Guest loses ₹${DEPOSIT_AMOUNT} non-refundable deposit. Continue?`)) return;
     try {
-      const res = await fetch(`/api/admin/bookings/${bookingId}/cancel`, { method: 'POST' });
+      const res = await fetch(`/api/admin/bookings/${bookingId}/cancel`, {
+        method: 'POST', headers: { 'x-admin-password': adminToken },
+      });
       const data = await res.json();
       if (data.success) { setSelectedBooking(null); fetchBookings(); } else setError('Cancellation failed');
     } catch { setError('Error cancelling booking'); }

@@ -2,9 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase/admin';
 import { FieldValue } from 'firebase-admin/firestore';
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'GreenHills2021';
-
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const pw = process.env.ADMIN_PASSWORD;
+  if (!pw || req.headers.get('x-admin-password') !== pw) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const snapshot = await adminDb.collection('blackoutDates').orderBy('date', 'asc').get();
     const dates = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
@@ -16,13 +18,12 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const pw = process.env.ADMIN_PASSWORD;
+  if (!pw || req.headers.get('x-admin-password') !== pw) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const body = await req.json();
-
-    if (body.password !== ADMIN_PASSWORD) {
-      return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
-    }
-
     const { dates } = body as { dates: { date: string; reason: string }[] };
 
     if (!Array.isArray(dates) || dates.length === 0) {

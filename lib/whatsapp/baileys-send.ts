@@ -59,40 +59,35 @@ export async function sendCustomerConfirmation(
     balanceDue: number;
     bookingId: string;
     paymentType: 'full' | 'deposit';
+    customerName?: string;
+    totalAmount?: number;
   }
 ) {
   const endTime = bookingDetails.startTime + bookingDetails.duration;
-  const paymentStatus =
-    bookingDetails.paymentType === 'full'
-      ? `✅ Fully paid — nothing due at venue`
-      : `💰 Balance Due at Venue: ₹${bookingDetails.balanceDue}`;
+  const guestName = bookingDetails.customerName ?? 'Guest';
+  const totalPaid = (bookingDetails.totalAmount ?? 0) - bookingDetails.balanceDue;
 
   const message =
-    `✅ BOOKING CONFIRMED — Green Hills Karaoke\n` +
-    `📅 Date: ${bookingDetails.date}\n` +
-    `⏰ Time: ${fmtTime(bookingDetails.startTime)} – ${fmtTime(endTime)}\n` +
-    `⏱️ Duration: ${fmtDuration(bookingDetails.duration)}\n` +
-    `${paymentStatus}\n` +
-    `🔖 Booking ID: ${bookingDetails.bookingId}\n\n` +
-    `⏰ Please arrive 10–15 mins before your slot.\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `📋 RULES & REGULATIONS\n` +
-    `━━━━━━━━━━━━━━━━━━━━\n` +
-    `1. No outside food or beverages allowed\n` +
-    `2. Alcohol & drugs strictly prohibited\n` +
-    `3. Smoking only in designated outdoor area\n` +
-    `4. Handle microphones & equipment with care\n` +
-    `5. Equipment damage will be charged to the guest\n` +
-    `6. Deposit is strictly non-refundable\n` +
-    `7. Late arrivals will NOT receive extra time\n` +
-    `8. Extensions subject to availability — request in advance\n` +
-    `9. Minors (under 18) must be accompanied by a parent/guardian\n` +
-    `10. Maintain sound levels within management limits\n` +
-    `11. Respect staff and fellow guests at all times\n` +
-    `12. Misconduct may result in immediate session termination\n` +
-    `13. Management reserves the right to refuse entry or service\n\n` +
-    `🎤 See you soon — sing your heart out!\n` +
-    `Green Hills Karaoke`;
+    `✅ BOOKING CONFIRMED!\n\n` +
+    `Booking ID: ${bookingDetails.bookingId}\n` +
+    `Date & Time: ${bookingDetails.date} | ${fmtTime(bookingDetails.startTime)} – ${fmtTime(endTime)}\n` +
+    `Guest Name: ${guestName}\n` +
+    `Duration: ${fmtDuration(bookingDetails.duration)}\n\n` +
+    `💰 PAYMENT SUMMARY\n` +
+    `Deposit (Non-Refundable): ₹500\n` +
+    `Remaining Amount: ₹${bookingDetails.balanceDue}\n` +
+    `Total Paid: ₹${totalPaid}\n\n` +
+    `📋 REFUND POLICY\n` +
+    `✗ ₹500 deposit is NON-REFUNDABLE — it locks your slot\n` +
+    `✓ Remaining amount refunded at admin discretion based on cancellation reason\n\n` +
+    `❌ TO CANCEL YOUR BOOKING\n` +
+    `Call or message any of our admins:\n` +
+    `📞 +91 90894 02122\n` +
+    `📞 +91 7085766889\n` +
+    `📞 +91 84138 53992\n` +
+    `📞 +918787633291\n\n` +
+    `Cancellations processed within 24 hours.\n` +
+    `Thank you for booking with GreenHills Karaoke! 🎤`;
 
   return sendIndividual(customerPhone, message);
 }

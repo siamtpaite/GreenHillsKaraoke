@@ -6,17 +6,20 @@ export async function POST(req: NextRequest) {
     const testPhone = '7085766889';
     const testBooking = {
       date: new Date().toISOString().split('T')[0],
+      startTime: 780,
       duration: 60,
       balanceDue: 0,
       bookingId: 'TEST-' + Date.now(),
       paymentType: 'full' as const,
+      customerName: 'Test Guest',
+      totalAmount: 50,
     };
 
     console.log('[test/whatsapp] Sending test WhatsApp messages:', testBooking);
 
     const [customerResult, adminResults] = await Promise.all([
       sendCustomerConfirmation(testPhone, testBooking),
-      sendAdminBookingAlert({ guestName: 'Test Guest', ...testBooking }),
+      sendAdminBookingAlert({ guestName: 'Test Guest', customerPhone: testPhone, ...testBooking }),
     ]);
 
     const allSuccess = customerResult.success && adminResults.every((r: any) => r.success);

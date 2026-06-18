@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { lockAndConfirmBooking, getBooking } from '@/lib/booking/service';
 import { adminDb } from '@/lib/firebase/admin';
+import { FieldValue } from 'firebase-admin/firestore';
 import { verifyPaymentSignature, refundPayment } from '@/lib/payment/razorpay';
 import { sendCustomerConfirmation, sendAdminBookingAlert } from '@/lib/whatsapp/baileys-send';
 import { ApiResponse } from '@/lib/types';
@@ -92,6 +93,29 @@ export async function POST(request: NextRequest) {
           { status: 409 }
         );
       }
+      // S7+S8: For any non-conflict Firestore error, auto-refund; on refund failure write pendingRefunds
+      console.error(`[confirm] Firestore failure for booking ${bookingId} — issuing auto-refund`);
+      try {
+        await refundPayment(razorpay_payment_id);
+        console.log(`[confirm] Auto-refund issued for payment ${razorpay_payment_id}`);
+      } catch (refundErr) {
+        console.error(`[confirm] Auto-refund failed for ${razorpay_payment_id}:`, refundErr);
+        try {
+          await adminDb.collection('pendingRefunds').doc(razorpay_payment_id).set({
+            bookingId,
+            razorpayPaymentId: razorpay_payment_id,
+            razorpayOrderId: razorpay_order_id,
+            customerName,
+            customerPhone,
+            reason: err instanceof Error ? err.message : 'Firestore failure during confirm',
+            createdAt: FieldValue.serverTimestamp(),
+            resolved: false,
+          });
+          console.log(`[confirm] Wrote pendingRefund doc for ${razorpay_payment_id}`);
+        } catch (fsErr) {
+          console.error(`[confirm] Failed to write pendingRefunds:`, fsErr);
+        }
+      }
       throw err;
     }
 
@@ -102,7 +126,7 @@ export async function POST(request: NextRequest) {
 
     console.log(`[confirm] Sending WhatsApp to customer=${customerPhone} admins=3 bookingId=${bookingId}`);
     await Promise.all([
-      sendCustomerConfirmation(customerPhone, { date, startTime, duration, balanceDue, bookingId, paymentType })
+      sendCustomerConfirmation(customerPhone, { date, startTime, duration, balanceDue, bookingId, paymentType, customerName, totalAmount })
         .catch((e) => console.error('[confirm] Customer WA failed:', e)),
       sendAdminBookingAlert({ guestName: customerName, customerPhone, date, startTime, duration, balanceDue, bookingId, paymentType })
         .catch((e) => console.error('[confirm] Admin WA failed:', e)),

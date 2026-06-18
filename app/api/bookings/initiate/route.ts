@@ -41,6 +41,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const today = new Date().toISOString().split('T')[0];
+    if (date < today) {
+      return NextResponse.json(
+        { success: false, error: 'Cannot book a date in the past' } as ApiResponse<null>,
+        { status: 400 }
+      );
+    }
+
     if (!/^\d{10}$/.test(customerPhone.replace(/[^\d]/g, ''))) {
       return NextResponse.json(
         { success: false, error: 'Invalid phone number' } as ApiResponse<null>,

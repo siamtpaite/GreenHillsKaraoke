@@ -60,10 +60,12 @@ export async function POST(
 
     await cancelBooking(bookingId);
 
-    console.log(`[Cancel] Sending WA — bookingId=${bookingId} phone=${booking.customerPhone} date=${booking.date} startTime=${booking.startTime} duration=${booking.duration}`);
+    const resolvedStart = booking.startTime ?? booking.startMinute ?? (booking.startHour != null ? booking.startHour * 60 : 0);
+    const resolvedDuration = booking.duration ?? (booking.hours != null ? booking.hours * 60 : 60);
+    console.log(`[Cancel] Sending WA — bookingId=${bookingId} phone=${booking.customerPhone} date=${booking.date} startTime=${resolvedStart} duration=${resolvedDuration}`);
     const [customerResult, adminResult] = await Promise.allSettled([
-      sendCustomerCancellationAlert(booking.customerPhone, { date: booking.date, startTime: booking.startTime, duration: booking.duration, bookingId }),
-      sendAdminCancellationAlert({ guestName: booking.customerName, customerPhone: booking.customerPhone, date: booking.date, startTime: booking.startTime, duration: booking.duration, paymentType: booking.paymentType, bookingId }),
+      sendCustomerCancellationAlert(booking.customerPhone, { date: booking.date, startTime: resolvedStart, duration: resolvedDuration, bookingId }),
+      sendAdminCancellationAlert({ guestName: booking.customerName, customerPhone: booking.customerPhone, date: booking.date, startTime: resolvedStart, duration: resolvedDuration, paymentType: booking.paymentType, bookingId }),
     ]);
 
     const cVal = customerResult.status === 'fulfilled' ? customerResult.value : null;

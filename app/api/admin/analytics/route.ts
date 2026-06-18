@@ -4,6 +4,10 @@ import { adminDb } from '@/lib/firebase/admin';
 const REVENUE_STATUSES = ['confirmed', 'pending_full_payment', 'checked_in', 'completed'];
 
 export async function GET(req: NextRequest) {
+  const pw = process.env.ADMIN_PASSWORD;
+  if (!pw || req.headers.get('x-admin-password') !== pw) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const { searchParams } = new URL(req.url);
     const period = searchParams.get('period') ?? 'week';

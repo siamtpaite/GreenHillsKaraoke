@@ -19,6 +19,10 @@ const ADMIN_END = 1440;
  * startTime: minutes from midnight. duration: minutes.
  */
 export async function POST(req: NextRequest) {
+  const pw = process.env.ADMIN_PASSWORD;
+  if (!pw || req.headers.get('x-admin-password') !== pw) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const body = await req.json();
     const { date, startTime: rawStartTime, duration: rawDuration, customerName, customerPhone, customerEmail, amountPaid, paymentType, notes } = body;
@@ -97,10 +101,12 @@ export async function POST(req: NextRequest) {
       });
     });
 
-    sendAdminBookingAlert({ guestName: customerName, customerPhone, date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType })
-      .catch((err) => console.error('[Manual Booking] Admin WA failed:', err));
-    sendCustomerConfirmation(customerPhone, { date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType })
-      .catch((err) => console.error('[Manual Booking] Customer WA failed:', err));
+    const waResults = await Promise.allSettled([
+      sendAdminBookingAlert({ guestName: customerName, customerPhone, date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType }),
+      sendCustomerConfirmation(customerPhone, { date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType, customerName, totalAmount }),
+    ]);
+    if (waResults[0].status === 'rejected') console.error('[Manual Booking] Admin WA failed:', waResults[0].reason);
+    if (waResults[1].status === 'rejected') console.error('[Manual Booking] Customer WA failed:', waResults[1].reason);
 
     return NextResponse.json(
       { success: true, message: 'Booking created', data: { bookingId } } as ApiResponse<{ bookingId: string }>,
@@ -127,6 +133,10 @@ export async function POST(req: NextRequest) {
  * Body: { bookingId, date?, startTime?, duration?, customerName?, customerPhone?, customerEmail?, amountPaid?, notes? }
  */
 export async function PUT(req: NextRequest) {
+  const pw = process.env.ADMIN_PASSWORD;
+  if (!pw || req.headers.get('x-admin-password') !== pw) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const body = await req.json();
     const { bookingId, date, startTime: rawStartTime, duration: rawDuration, customerName, customerPhone, customerEmail, amountPaid, notes } = body;
