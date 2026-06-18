@@ -7,7 +7,7 @@ import { sendCustomerConfirmation, sendAdminBookingAlert } from '@/lib/whatsapp/
 import { ApiResponse } from '@/lib/types';
 
 const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '50');
-const DEPOSIT_AMOUNT = parseInt(process.env.DEPOSIT_AMOUNT || '50');
+const DEPOSIT_AMOUNT = parseInt(process.env.NEXT_PUBLIC_DEPOSIT_AMOUNT || '500');
 
 /**
  * POST /api/bookings/confirm

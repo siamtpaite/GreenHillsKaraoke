@@ -6,7 +6,7 @@ import { sendAdminBookingAlert, sendCustomerConfirmation } from '@/lib/whatsapp/
 import { ApiResponse, Booking } from '@/lib/types';
 
 const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '50');
-const DEPOSIT_AMOUNT = parseInt(process.env.DEPOSIT_AMOUNT || '50');
+const DEPOSIT_AMOUNT = parseInt(process.env.NEXT_PUBLIC_DEPOSIT_AMOUNT || '500');
 
 // Admin sessions run 10 AM – midnight (600–1440 min)
 const ADMIN_START = 600;
