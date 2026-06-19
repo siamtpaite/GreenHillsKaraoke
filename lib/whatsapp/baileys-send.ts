@@ -1,4 +1,5 @@
 const WHATSAPP_SERVER_URL = process.env.WHATSAPP_SERVER_URL || 'http://152.42.201.75:3001';
+const DEPOSIT_AMOUNT = parseInt(process.env.NEXT_PUBLIC_DEPOSIT_AMOUNT || '500');
 
 const ADMIN_NUMBERS = ['919089402122', '918413853992', '917085766889'];
 
@@ -31,6 +32,7 @@ async function sendIndividual(phone: string, message: string): Promise<{ success
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ phone: formatted, message }),
+      signal: AbortSignal.timeout(8000),
     });
     const json = await res.json() as { success: boolean; messageId?: string; error?: string };
     if (json.success) {
@@ -61,11 +63,16 @@ export async function sendCustomerConfirmation(
     paymentType: 'full' | 'deposit';
     customerName?: string;
     totalAmount?: number;
+    cancellationToken?: string;
   }
 ) {
   const endTime = bookingDetails.startTime + bookingDetails.duration;
   const guestName = bookingDetails.customerName ?? 'Guest';
   const totalPaid = (bookingDetails.totalAmount ?? 0) - bookingDetails.balanceDue;
+
+  const tokenSection = bookingDetails.cancellationToken
+    ? `\n🔑 CANCELLATION TOKEN: ${bookingDetails.cancellationToken}\n(Keep this safe — required to cancel your booking)\n`
+    : '';
 
   const message =
     `✅ BOOKING CONFIRMED!\n\n` +
@@ -74,12 +81,29 @@ export async function sendCustomerConfirmation(
     `Guest Name: ${guestName}\n` +
     `Duration: ${fmtDuration(bookingDetails.duration)}\n\n` +
     `💰 PAYMENT SUMMARY\n` +
-    `Deposit (Non-Refundable): ₹500\n` +
+    `Deposit (Non-Refundable): ₹${DEPOSIT_AMOUNT}\n` +
     `Remaining Amount: ₹${bookingDetails.balanceDue}\n` +
     `Total Paid: ₹${totalPaid}\n\n` +
     `📋 REFUND POLICY\n` +
-    `✗ ₹500 deposit is NON-REFUNDABLE — it locks your slot\n` +
-    `✓ Remaining amount refunded at admin discretion based on cancellation reason\n\n` +
+    `✗ ₹${DEPOSIT_AMOUNT} deposit is NON-REFUNDABLE — it locks your slot\n` +
+    `✓ Remaining amount refunded at admin discretion based on cancellation reason\n` +
+    tokenSection + `\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `📋 RULES & REGULATIONS\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n` +
+    `1. No outside food or beverages allowed\n` +
+    `2. Alcohol & drugs strictly prohibited\n` +
+    `3. Smoking only in designated outdoor area\n` +
+    `4. Handle microphones & equipment with care\n` +
+    `5. Equipment damage will be charged to the guest\n` +
+    `6. Deposit is strictly non-refundable\n` +
+    `7. Late arrivals will NOT receive extra time\n` +
+    `8. Extensions subject to availability — request in advance\n` +
+    `9. Minors (under 18) must be accompanied by a parent/guardian\n` +
+    `10. Maintain sound levels within management limits\n` +
+    `11. Respect staff and fellow guests at all times\n` +
+    `12. Misconduct may result in immediate session termination\n` +
+    `13. Management reserves the right to refuse entry or service\n\n` +
     `❌ TO CANCEL YOUR BOOKING\n` +
     `Call or message any of our admins:\n` +
     `📞 +91 90894 02122\n` +
@@ -118,7 +142,7 @@ export async function sendAdminBookingAlert(bookingDetails: {
     `📞 Phone: ${bookingDetails.customerPhone}\n` +
     `🔖 Booking ID: ${bookingDetails.bookingId}`;
 
-  return Promise.all(ADMIN_NUMBERS.map((n) => sendIndividual(n, message)));
+  return Promise.allSettled(ADMIN_NUMBERS.map((n) => sendIndividual(n, message)));
 }
 
 export async function sendAdminCancellationAlert(bookingDetails: {
@@ -140,7 +164,7 @@ export async function sendAdminCancellationAlert(bookingDetails: {
     `📞 Phone: ${bookingDetails.customerPhone}\n` +
     `🔖 Booking ID: ${bookingDetails.bookingId}`;
 
-  return Promise.all(ADMIN_NUMBERS.map((n) => sendIndividual(n, message)));
+  return Promise.allSettled(ADMIN_NUMBERS.map((n) => sendIndividual(n, message)));
 }
 
 export async function sendCustomerCancellationAlert(
@@ -159,4 +183,43 @@ export async function sendCustomerCancellationAlert(
     `Green Hills Karaoke`;
 
   return sendIndividual(customerPhone, message);
+}
+
+export async function sendAdminCheckInAlert(bookingDetails: {
+  guestName: string;
+  customerPhone: string;
+  date: string;
+  startTime: number;
+  duration: number;
+  balanceDue: number;
+  bookingId: string;
+}) {
+  const endTime = bookingDetails.startTime + bookingDetails.duration;
+  const balanceLine = bookingDetails.balanceDue > 0
+    ? `💳 Balance Due: ₹${bookingDetails.balanceDue}`
+    : `💳 Fully Paid`;
+  const message =
+    `🎤 GUEST CHECKED IN — Green Hills Karaoke\n` +
+    `👤 Guest: ${bookingDetails.guestName}\n` +
+    `📅 Date: ${bookingDetails.date}\n` +
+    `⏰ Time: ${fmtTime(bookingDetails.startTime)} – ${fmtTime(endTime)}\n` +
+    `${balanceLine}\n` +
+    `📞 Phone: ${bookingDetails.customerPhone}\n` +
+    `🔖 Booking ID: ${bookingDetails.bookingId}`;
+
+  return Promise.allSettled(ADMIN_NUMBERS.map((n) => sendIndividual(n, message)));
+}
+
+export async function sendAdminCheckOutAlert(bookingDetails: {
+  guestName: string;
+  date: string;
+  bookingId: string;
+}) {
+  const message =
+    `✅ SESSION COMPLETE — Green Hills Karaoke\n` +
+    `👤 Guest: ${bookingDetails.guestName}\n` +
+    `📅 Date: ${bookingDetails.date}\n` +
+    `🔖 Booking ID: ${bookingDetails.bookingId}`;
+
+  return Promise.allSettled(ADMIN_NUMBERS.map((n) => sendIndividual(n, message)));
 }

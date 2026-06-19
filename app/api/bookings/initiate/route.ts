@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { isTimeRangeAvailable, isBlackoutDate, getOperatingHours } from '@/lib/utils/availability';
 import { createRazorpayOrder } from '@/lib/payment/razorpay';
 import { adminDb } from '@/lib/firebase/admin';
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { ApiResponse } from '@/lib/types';
 
 const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE || '1180');
@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const today = new Date().toISOString().split('T')[0];
+    const today = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata' }).split(' ')[0];
     if (date < today) {
       return NextResponse.json(
         { success: false, error: 'Cannot book a date in the past' } as ApiResponse<null>,
@@ -109,6 +109,16 @@ export async function POST(request: NextRequest) {
     await adminDb.doc(`razorpayOrders/${razorpayOrder.id}`).set({
       bookingId,
       paymentType,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+
+    // Write a 15-minute slot hold so concurrent initiate requests see this slot as taken
+    await adminDb.doc(`slotHolds/${bookingId}`).set({
+      date,
+      startTime,
+      duration,
+      bookingId,
+      expiresAt: Timestamp.fromDate(new Date(Date.now() + 15 * 60 * 1000)),
       createdAt: FieldValue.serverTimestamp(),
     });
 

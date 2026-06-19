@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase/admin';
 import { FieldValue } from 'firebase-admin/firestore';
@@ -60,6 +61,7 @@ export async function POST(req: NextRequest) {
       paymentType === 'full' || paymentType === 'deposit'
         ? paymentType
         : paidAmount >= totalAmount ? 'full' : 'deposit';
+    const cancellationToken = crypto.randomBytes(6).toString('hex');
 
     await adminDb.runTransaction(async (tx) => {
       const existingSnap = await tx.get(
@@ -96,6 +98,7 @@ export async function POST(req: NextRequest) {
         amountDue: balanceDue,
         status: 'confirmed',
         notes: notes || '',
+        cancellationToken,
         createdAt: FieldValue.serverTimestamp(),
         createdBy: 'admin',
       });
@@ -103,7 +106,7 @@ export async function POST(req: NextRequest) {
 
     const waResults = await Promise.allSettled([
       sendAdminBookingAlert({ guestName: customerName, customerPhone, date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType }),
-      sendCustomerConfirmation(customerPhone, { date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType, customerName, totalAmount }),
+      sendCustomerConfirmation(customerPhone, { date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType, customerName, totalAmount, cancellationToken }),
     ]);
     if (waResults[0].status === 'rejected') console.error('[Manual Booking] Admin WA failed:', waResults[0].reason);
     if (waResults[1].status === 'rejected') console.error('[Manual Booking] Customer WA failed:', waResults[1].reason);

@@ -58,7 +58,7 @@ export default function BookingPage() {
   const [selectedStart, setSelectedStart] = useState<number | null>(null);
   const [selectedDuration, setSelectedDuration] = useState(60);
   const [formData, setFormData] = useState({ customerName: '', customerEmail: '', customerPhone: '', vipMember: false });
-  const [bookingData, setBookingData] = useState({ bookingId: '', totalAmount: 0, paidAmount: 0, balanceDue: 0, paymentType: '' as PaymentType | '' });
+  const [bookingData, setBookingData] = useState({ bookingId: '', totalAmount: 0, paidAmount: 0, balanceDue: 0, paymentType: '' as PaymentType | '', cancellationToken: '' });
   const [paymentChoiceLoading, setPaymentChoiceLoading] = useState<'' | 'full' | 'deposit'>('');
   const [cancelLoading, setCancelLoading] = useState(false);
   const [bookingCancelled, setBookingCancelled] = useState(false);
@@ -112,7 +112,7 @@ export default function BookingPage() {
       if (!data.success) { setConfirmError(data.error || 'Failed to initiate payment'); setPaymentChoiceLoading(''); return; }
       const { bookingId, totalAmount: total, razorpayOrder } = data.data;
       const paid = Math.round(razorpayOrder.amount / 100);
-      setBookingData({ bookingId, totalAmount: total, paidAmount: paid, balanceDue: total - paid, paymentType: type });
+      setBookingData({ bookingId, totalAmount: total, paidAmount: paid, balanceDue: total - paid, paymentType: type, cancellationToken: '' });
       const options = {
         key: razorpayKey, order_id: razorpayOrder.id, amount: razorpayOrder.amount,
         currency: razorpayOrder.currency || 'INR', name: 'Green Hills Karaoke',
@@ -128,8 +128,14 @@ export default function BookingPage() {
                 customerPhone: formData.customerPhone, paymentType: type }),
             });
             const cd = await cr.json();
-            if (cd.success) setStep('confirmation');
-            else setConfirmError(cd.error || 'Payment verification failed');
+            if (cd.success) {
+              const token = cd.data?.cancellationToken ?? '';
+              if (token) sessionStorage.setItem(`cancelToken_${bookingId}`, token);
+              setBookingData((prev) => ({ ...prev, cancellationToken: token }));
+              setStep('confirmation');
+            } else {
+              setConfirmError(cd.error || 'Payment verification failed');
+            }
           } catch { setConfirmError('Payment verification error'); }
         },
         prefill: { name: formData.customerName, email: formData.customerEmail, contact: formData.customerPhone },
@@ -144,11 +150,21 @@ export default function BookingPage() {
 
   const handleCancelBooking = async () => {
     if (!confirm(`⚠️ Cancellation will forfeit your ₹${DEPOSIT} non-refundable deposit. Continue?`)) return;
+
+    let token = bookingData.cancellationToken || sessionStorage.getItem(`cancelToken_${bookingData.bookingId}`) || '';
+    if (!token) {
+      token = window.prompt('Enter your cancellation token (found in your WhatsApp booking confirmation):') ?? '';
+    }
+    if (!token.trim()) {
+      setConfirmError('Cancellation token is required. Check your WhatsApp booking confirmation message.');
+      return;
+    }
+
     setCancelLoading(true);
     try {
       const res = await fetch(`/api/bookings/${bookingData.bookingId}/cancel`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerPhone: formData.customerPhone }),
+        body: JSON.stringify({ customerPhone: formData.customerPhone, cancellationToken: token.trim() }),
       });
       const data = await res.json();
       if (data.success) setBookingCancelled(true); else setConfirmError(data.error || 'Cancellation failed');
@@ -160,7 +176,8 @@ export default function BookingPage() {
     setStep('date'); setSelectedDate(''); setBookedRanges([]); setIsBlackout(false);
     setSelectedStart(null); setSelectedDuration(60); setBookingCancelled(false);
     setFormData({ customerName: '', customerEmail: '', customerPhone: '', vipMember: false });
-    setBookingData({ bookingId: '', totalAmount: 0, paidAmount: 0, balanceDue: 0, paymentType: '' });
+    if (bookingData.bookingId) sessionStorage.removeItem(`cancelToken_${bookingData.bookingId}`);
+    setBookingData({ bookingId: '', totalAmount: 0, paidAmount: 0, balanceDue: 0, paymentType: '', cancellationToken: '' });
     setConfirmError('');
   };
 

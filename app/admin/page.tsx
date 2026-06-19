@@ -12,7 +12,7 @@ const ADMIN_START = 600;   // 10:00
 const ADMIN_END   = 1440;  // 24:00 (midnight)
 const ADMIN_SPAN  = ADMIN_END - ADMIN_START;
 
-type AdminTab = 'bookings' | 'analytics' | 'blackout';
+type AdminTab = 'bookings' | 'analytics' | 'blackout' | 'refunds';
 type AnalyticsPeriod = 'today' | 'week' | 'month';
 
 interface Booking {
@@ -54,6 +54,17 @@ interface OfflineForm {
 }
 
 interface BlackoutDate { id: string; date: string; reason: string; createdBy: string; createdAt: any; }
+interface PendingRefund {
+  id: string;
+  bookingId: string;
+  razorpayPaymentId: string;
+  razorpayOrderId?: string;
+  customerName: string;
+  customerPhone: string;
+  reason: string;
+  createdAt: string | null;
+  resolved: boolean;
+}
 interface BlackoutForm { startDate: string; endDate: string; reason: string; }
 interface AnalyticsData {
   totalRevenue: number; bookingsCount: number; pendingPayments: number;
@@ -154,6 +165,9 @@ export default function AdminDashboard() {
   const [blackoutSubmitting, setBlackoutSubmitting] = useState(false);
   const [blackoutError, setBlackoutError] = useState('');
   const [adminToken, setAdminToken] = useState('');
+  const [pendingRefunds, setPendingRefunds] = useState<PendingRefund[]>([]);
+  const [refundsLoading, setRefundsLoading] = useState(false);
+  const [refundsError, setRefundsError] = useState('');
 
   const handleLogin = async () => {
     if (!password.trim()) { setError('Enter admin password'); return; }
@@ -260,10 +274,36 @@ export default function AdminDashboard() {
     } catch { setBlackoutError('Network error.'); }
   };
 
+  const fetchPendingRefunds = async () => {
+    setRefundsLoading(true); setRefundsError('');
+    try {
+      const res = await fetch('/api/admin/pending-refunds', { headers: { 'x-admin-password': adminToken } });
+      const data = await res.json();
+      if (data.success) setPendingRefunds(data.data);
+      else setRefundsError(data.error || 'Failed to fetch');
+    } catch { setRefundsError('Network error'); }
+    finally { setRefundsLoading(false); }
+  };
+
+  const resolveRefund = async (paymentId: string) => {
+    if (!confirm('Mark this refund as manually resolved?')) return;
+    try {
+      const res = await fetch('/api/admin/pending-refunds', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'x-admin-password': adminToken },
+        body: JSON.stringify({ paymentId }),
+      });
+      const data = await res.json();
+      if (data.success) fetchPendingRefunds();
+      else setRefundsError(data.error || 'Failed to resolve');
+    } catch { setRefundsError('Network error'); }
+  };
+
   useEffect(() => { setMounted(true); }, []);
   useEffect(() => { if (showModal && form.date) fetchFormBookings(form.date); }, [showModal, form.date]);
   useEffect(() => { if (authenticated && activeTab === 'analytics') fetchAnalytics(analyticsPeriod); }, [authenticated, activeTab, analyticsPeriod]);
   useEffect(() => { if (authenticated && activeTab === 'blackout') fetchBlackoutDates(); }, [authenticated, activeTab]);
+  useEffect(() => { if (authenticated && activeTab === 'refunds') fetchPendingRefunds(); }, [authenticated, activeTab]);
 
   // Conflict detection: range overlap against other bookings on the same date
   const conflict = (() => {
@@ -420,10 +460,10 @@ export default function AdminDashboard() {
         <div className="backdrop-blur-xl bg-slate-900/40 border border-cyan-400/20 rounded-2xl shadow-2xl shadow-cyan-400/5">
           {/* Tabs */}
           <div className="flex gap-2 flex-wrap px-5 pt-5 pb-4 border-b border-slate-700/50">
-            {(['bookings','analytics','blackout'] as AdminTab[]).map(tab => (
+            {(['bookings','analytics','blackout','refunds'] as AdminTab[]).map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)}
                 className={`px-5 py-2 rounded-lg font-bold text-sm transition-all ${activeTab === tab ? 'bg-gradient-to-r from-cyan-500 to-pink-500 text-white shadow-lg shadow-cyan-500/30' : 'bg-slate-800/50 border border-slate-600/60 text-cyan-300/70 hover:border-slate-500 hover:text-cyan-300'}`}>
-                {tab === 'bookings' ? '📋 Bookings' : tab === 'analytics' ? '📊 Analytics' : '🚫 Blackout Dates'}
+                {tab === 'bookings' ? '📋 Bookings' : tab === 'analytics' ? '📊 Analytics' : tab === 'blackout' ? '🚫 Blackout Dates' : '💸 Pending Refunds'}
               </button>
             ))}
           </div>
@@ -683,6 +723,44 @@ export default function AdminDashboard() {
                   </div>
                 ))}
             </div>
+          </div>
+        )}
+
+        {/* ── PENDING REFUNDS TAB ── */}
+        {activeTab === 'refunds' && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-pink-300 font-black text-lg">💸 Pending Refunds</h3>
+              <button onClick={fetchPendingRefunds} disabled={refundsLoading}
+                className="bg-slate-800/50 border border-slate-600/60 text-cyan-300/70 hover:text-cyan-300 text-xs font-bold px-3 py-1.5 rounded-lg transition-all">
+                {refundsLoading ? 'Loading…' : '🔄 Refresh'}
+              </button>
+            </div>
+            {refundsError && <p className="text-pink-400 text-sm">{refundsError}</p>}
+            {!refundsLoading && pendingRefunds.length === 0 && (
+              <div className="backdrop-blur-xl bg-slate-900/40 border border-cyan-400/20 rounded-xl p-8 text-center">
+                <p className="text-green-400 font-bold">✅ No pending refunds</p>
+                <p className="text-slate-500 text-sm mt-1">All Razorpay refunds processed successfully.</p>
+              </div>
+            )}
+            {pendingRefunds.map((r) => (
+              <div key={r.id} className="backdrop-blur-xl bg-slate-900/40 border border-red-400/30 rounded-xl p-4 space-y-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-1 flex-1 min-w-0">
+                    <p className="text-white font-bold text-sm truncate">{r.customerName} · {r.customerPhone}</p>
+                    <p className="text-slate-400 text-xs font-mono">Payment: {r.razorpayPaymentId}</p>
+                    <p className="text-slate-400 text-xs font-mono">Booking: {r.bookingId}</p>
+                    <p className="text-pink-300/80 text-xs">{r.reason}</p>
+                    {r.createdAt && <p className="text-slate-500 text-xs">{new Date(r.createdAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}</p>}
+                  </div>
+                  <button onClick={() => resolveRefund(r.id)}
+                    className="shrink-0 bg-emerald-500/20 border border-emerald-500/40 hover:bg-emerald-500/30 text-emerald-300 text-xs font-bold px-3 py-1.5 rounded-lg transition-all">
+                    ✓ Resolved
+                  </button>
+                </div>
+              </div>
+            ))}
+            <p className="text-slate-500 text-xs">These are payments where the Razorpay refund API failed. Process them manually in the Razorpay dashboard and click Resolved.</p>
           </div>
         )}
 

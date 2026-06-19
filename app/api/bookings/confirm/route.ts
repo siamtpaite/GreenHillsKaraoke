@@ -63,8 +63,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    let cancellationToken: string;
     try {
-      await lockAndConfirmBooking(
+      cancellationToken = await lockAndConfirmBooking(
         bookingId,
         { date, startTime, duration, customerName, customerEmail, customerPhone, paymentType },
         razorpay_payment_id,
@@ -126,14 +127,22 @@ export async function POST(request: NextRequest) {
 
     console.log(`[confirm] Sending WhatsApp to customer=${customerPhone} admins=3 bookingId=${bookingId}`);
     await Promise.all([
-      sendCustomerConfirmation(customerPhone, { date, startTime, duration, balanceDue, bookingId, paymentType, customerName, totalAmount })
+      sendCustomerConfirmation(customerPhone, { date, startTime, duration, balanceDue, bookingId, paymentType, customerName, totalAmount, cancellationToken })
         .catch((e) => console.error('[confirm] Customer WA failed:', e)),
       sendAdminBookingAlert({ guestName: customerName, customerPhone, date, startTime, duration, balanceDue, bookingId, paymentType })
         .catch((e) => console.error('[confirm] Admin WA failed:', e)),
     ]);
 
+    // Mark WA as sent so webhook does not send a duplicate confirmation
+    adminDb.doc(`bookings/${bookingId}`).update({ waSentAt: FieldValue.serverTimestamp() })
+      .catch((e) => console.error('[confirm] Failed to mark waSentAt:', e));
+
+    // Delete slot hold now that the booking is confirmed
+    adminDb.doc(`slotHolds/${bookingId}`).delete()
+      .catch(() => { /* hold may not exist for non-online paths — safe to ignore */ });
+
     return NextResponse.json(
-      { success: true, message: 'Booking confirmed', data: { bookingId, status: 'confirmed' } } as ApiResponse<any>,
+      { success: true, message: 'Booking confirmed', data: { bookingId, status: 'confirmed', cancellationToken } } as ApiResponse<any>,
       { status: 200 }
     );
   } catch (error) {

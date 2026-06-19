@@ -25,6 +25,8 @@ export interface Booking {
   status: 'confirmed' | 'checked_in' | 'completed' | 'no_show' | 'cancelled';
   razorpayOrderId?: string;
   razorpayPaymentId?: string;
+  cancellationToken?: string;
+  waSentAt?: Date;
   createdAt: Date;
   checkInTime?: Date;
   checkOutTime?: Date;

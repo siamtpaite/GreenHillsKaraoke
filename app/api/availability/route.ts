@@ -17,9 +17,8 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    if (new Date(date + 'T00:00:00') < today) {
+    const todayIST = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Kolkata' }).split(' ')[0];
+    if (date < todayIST) {
       return NextResponse.json(
         { success: false, error: 'Cannot check availability for past dates' },
         { status: 400 }

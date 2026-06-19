@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { sendCustomerConfirmation, sendAdminBookingAlert } from '@/lib/whatsapp/baileys-send';
 
 export async function POST(req: NextRequest) {
+  const pw = process.env.ADMIN_PASSWORD;
+  if (!pw || req.headers.get('x-admin-password') !== pw) {
+    return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  }
   try {
     const testPhone = '7085766889';
     const testBooking = {

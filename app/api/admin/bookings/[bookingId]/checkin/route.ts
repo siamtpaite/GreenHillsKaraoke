@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase/admin';
-import { sendWhatsAppMessage } from '@/lib/whatsapp/baileys-send';
+import { sendWhatsAppMessage, sendAdminCheckInAlert } from '@/lib/whatsapp/baileys-send';
 import { FieldValue } from 'firebase-admin/firestore';
 
 export async function POST(
@@ -36,6 +36,7 @@ export async function POST(
     });
 
     const balanceDue = booking.balanceDue ?? booking.amountDue ?? 0;
+    const startTime = booking.startTime ?? booking.startMinute ?? (booking.startHour ?? 0) * 60;
     const dur = booking.duration ?? (booking.hours ?? 1) * 60;
     const h = Math.floor(dur / 60), m = dur % 60;
     const durStr = m === 0 ? `${h}h` : `${h}h ${m}min`;
@@ -51,6 +52,16 @@ export async function POST(
         `${balanceLine}\n\n` +
         `Enjoy your session! 🎶`,
     }).catch((e) => console.error('[Check-in] Customer WA failed:', e));
+
+    sendAdminCheckInAlert({
+      guestName: booking.customerName,
+      customerPhone: booking.customerPhone,
+      date: booking.date,
+      startTime,
+      duration: dur,
+      balanceDue,
+      bookingId,
+    }).catch((e) => console.error('[Check-in] Admin WA failed:', e));
 
     return NextResponse.json({ success: true, data: { status: 'checked_in' } });
   } catch (error) {

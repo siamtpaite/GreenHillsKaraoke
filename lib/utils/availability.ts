@@ -85,7 +85,25 @@ export async function getAvailability(date: string): Promise<AvailabilityRespons
   return { date, bookedRanges };
 }
 
-// Check if [startTime, startTime+duration] is free of confirmed/checked-in bookings.
+// Fetch active slot holds (written by /initiate before payment, expire in 15 min)
+async function getActiveSlotHolds(date: string): Promise<{ holdId: string; start: number; end: number }[]> {
+  const now = Date.now();
+  const snap = await adminDb
+    .collection('slotHolds')
+    .where('date', '==', date)
+    .get();
+  return snap.docs
+    .filter((doc) => {
+      const d = doc.data();
+      return d.expiresAt && d.expiresAt.toMillis() > now;
+    })
+    .map((doc) => {
+      const d = doc.data();
+      return { holdId: doc.id, start: d.startTime, end: d.startTime + d.duration };
+    });
+}
+
+// Check if [startTime, startTime+duration] is free of confirmed/checked-in bookings and active slot holds.
 // excludeBookingId is used for edit flows (skip own booking when checking).
 export async function isTimeRangeAvailable(
   date: string,
@@ -94,16 +112,25 @@ export async function isTimeRangeAvailable(
   excludeBookingId?: string
 ): Promise<boolean> {
   const endTime = startTime + duration;
-  const snap = await adminDb
-    .collection('bookings')
-    .where('date', '==', date)
-    .where('status', 'in', ['confirmed', 'checked_in'])
-    .get();
+  const [bookingSnap, holds] = await Promise.all([
+    adminDb
+      .collection('bookings')
+      .where('date', '==', date)
+      .where('status', 'in', ['confirmed', 'checked_in'])
+      .get(),
+    getActiveSlotHolds(date),
+  ]);
 
-  for (const doc of snap.docs) {
+  for (const doc of bookingSnap.docs) {
     if (doc.id === excludeBookingId) continue;
     const { start: bStart, end: bEnd } = resolveRange(doc.data());
     if (startTime < bEnd && endTime > bStart) return false;
   }
+
+  for (const hold of holds) {
+    if (hold.holdId === excludeBookingId) continue;
+    if (startTime < hold.end && endTime > hold.start) return false;
+  }
+
   return true;
 }

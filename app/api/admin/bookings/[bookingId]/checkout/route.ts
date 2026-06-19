@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase/admin';
-import { sendWhatsAppMessage } from '@/lib/whatsapp/baileys-send';
+import { sendWhatsAppMessage, sendAdminCheckOutAlert } from '@/lib/whatsapp/baileys-send';
 import { FieldValue } from 'firebase-admin/firestore';
 
 export async function POST(
@@ -43,6 +43,12 @@ export async function POST(
         `Hope you had an amazing time! 🎤\n` +
         `See you again soon — Green Hills Karaoke`,
     }).catch((e) => console.error('[Check-out] Customer WA failed:', e));
+
+    sendAdminCheckOutAlert({
+      guestName: booking.customerName,
+      date: booking.date,
+      bookingId,
+    }).catch((e) => console.error('[Check-out] Admin WA failed:', e));
 
     return NextResponse.json({
       success: true,

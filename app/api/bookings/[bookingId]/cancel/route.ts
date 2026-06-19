@@ -25,14 +25,7 @@ export async function POST(
     }
 
     const body = await request.json().catch(() => ({}));
-    const { customerPhone } = body as { customerPhone?: string };
-
-    if (!customerPhone) {
-      return NextResponse.json(
-        { success: false, error: 'customerPhone is required' } as ApiResponse<null>,
-        { status: 400 }
-      );
-    }
+    const { customerPhone, cancellationToken } = body as { customerPhone?: string; cancellationToken?: string };
 
     const booking = await getBooking(bookingId);
 
@@ -43,12 +36,28 @@ export async function POST(
       );
     }
 
-    // Verify the requester owns this booking
-    if (normalisePhone(customerPhone) !== normalisePhone(booking.customerPhone)) {
-      return NextResponse.json(
-        { success: false, error: 'Phone number does not match booking' } as ApiResponse<null>,
-        { status: 403 }
-      );
+    if (booking.cancellationToken) {
+      // New booking — token was issued at confirmation; require it
+      if (!cancellationToken || cancellationToken !== booking.cancellationToken) {
+        return NextResponse.json(
+          { success: false, error: 'Invalid cancellation token. Check your WhatsApp booking confirmation.' } as ApiResponse<null>,
+          { status: 403 }
+        );
+      }
+    } else {
+      // Legacy booking — no token was ever issued; fall back to phone-number match
+      if (!customerPhone) {
+        return NextResponse.json(
+          { success: false, error: 'customerPhone is required for this booking' } as ApiResponse<null>,
+          { status: 400 }
+        );
+      }
+      if (normalisePhone(customerPhone) !== normalisePhone(booking.customerPhone)) {
+        return NextResponse.json(
+          { success: false, error: 'Phone number does not match booking' } as ApiResponse<null>,
+          { status: 403 }
+        );
+      }
     }
 
     if (['completed', 'cancelled', 'no_show'].includes(booking.status)) {

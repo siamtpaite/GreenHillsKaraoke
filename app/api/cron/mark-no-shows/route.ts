@@ -12,11 +12,10 @@ async function runNoShowCheck() {
   let noShowsMarked = 0;
 
   for (const status of ACTIVE_STATUSES) {
-    // S10: filter to today and earlier to avoid scanning future bookings
+    // Single-field query to avoid composite index requirement; filter by date in memory
     const snapshot = await adminDb
       .collection('bookings')
       .where('status', '==', status)
-      .where('date', '<=', today)
       .get();
 
     console.log(`[no-show] Checking ${snapshot.size} bookings with status '${status}'`);
@@ -27,6 +26,12 @@ async function runNoShowCheck() {
 
       if (!date) {
         console.warn(`[no-show] Skipping ${docSnap.id} — missing date`);
+        continue;
+      }
+
+      // Only process today and earlier; skip future bookings
+      if (date > today) {
+        console.log(`[no-show] Skipping ${docSnap.id} — future date ${date}`);
         continue;
       }
 

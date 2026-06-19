@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { FieldValue } from 'firebase-admin/firestore';
 import { adminDb } from '../firebase/admin';
 import { Booking, BookingRequest } from '../types';
@@ -31,9 +32,10 @@ export async function lockAndConfirmBooking(
   req: BookingRequest,
   razorpayPaymentId: string,
   razorpayOrderId: string
-): Promise<void> {
+): Promise<string> {
   const endTime = req.startTime + req.duration;
   const totalAmount = Math.ceil(req.duration / 60) * HOURLY_RATE;
+  const cancellationToken = crypto.randomBytes(6).toString('hex');
 
   await adminDb.runTransaction(async (tx) => {
     // Read all active bookings for the date within the transaction
@@ -73,9 +75,12 @@ export async function lockAndConfirmBooking(
       status: 'confirmed',
       razorpayPaymentId,
       razorpayOrderId,
+      cancellationToken,
       createdAt: FieldValue.serverTimestamp(),
-    } as Partial<Booking>);
+    } as unknown as Partial<Booking>);
   });
+
+  return cancellationToken;
 }
 
 export async function cancelBooking(bookingId: string): Promise<void> {

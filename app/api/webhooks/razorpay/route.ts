@@ -33,8 +33,8 @@ export async function POST(request: NextRequest) {
 
       if (event === 'payment.captured' && bookingId) {
         const booking = await getBooking(bookingId);
-        if (booking && booking.status === 'confirmed') {
-          console.log(`[razorpay webhook] Sending WhatsApp confirmation for booking ${bookingId}`);
+        if (booking && booking.status === 'confirmed' && !(booking as any).waSentAt) {
+          console.log(`[razorpay webhook] Sending WhatsApp confirmation for booking ${bookingId} (waSentAt not set)`);
           await sendCustomerConfirmation(booking.customerPhone, {
             date: booking.date,
             startTime: booking.startTime,
