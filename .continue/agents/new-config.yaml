@@ -1,0 +1,21 @@
+name: DeepSeek Config
+version: 1.0.0
+schema: v1
+
+models:
+  - name: DeepSeek Chat
+    provider: deepseek
+    model: deepseek-chat
+    apiKey: sk-63e689dcdbfb4c8eab1d52016866b02a
+    roles:
+      - chat
+      - edit
+      - apply
+      - autocomplete
+
+  - name: DeepSeek Reasoner
+    provider: deepseek
+    model: deepseek-reasoner
+    apiKey: sk-63e689dcdbfb4c8eab1d52016866b02a
+    roles:
+      - chat
