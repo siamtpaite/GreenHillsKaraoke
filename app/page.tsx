@@ -57,7 +57,7 @@ export default function BookingPage() {
   const [dateError, setDateError] = useState('');
   const [selectedStart, setSelectedStart] = useState<number | null>(null);
   const [selectedDuration, setSelectedDuration] = useState(60);
-  const [formData, setFormData] = useState({ customerName: '', customerEmail: '', customerPhone: '', vipMember: false });
+  const [formData, setFormData] = useState({ customerName: '', customerEmail: '', customerPhone: '', vipMember: false, specialRequests: '' });
   const [bookingData, setBookingData] = useState({ bookingId: '', totalAmount: 0, paidAmount: 0, balanceDue: 0, paymentType: '' as PaymentType | '', cancellationToken: '' });
   const [paymentChoiceLoading, setPaymentChoiceLoading] = useState<'' | 'full' | 'deposit'>('');
   const [cancelLoading, setCancelLoading] = useState(false);
@@ -106,7 +106,8 @@ export default function BookingPage() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ date: selectedDate, startTime: selectedStart, duration: selectedDuration,
           customerName: formData.customerName, customerEmail: formData.customerEmail,
-          customerPhone: formData.customerPhone, paymentType: type }),
+          customerPhone: formData.customerPhone, paymentType: type,
+          specialRequests: formData.specialRequests }),
       });
       const data = await res.json();
       if (!data.success) { setConfirmError(data.error || 'Failed to initiate payment'); setPaymentChoiceLoading(''); return; }
@@ -125,7 +126,8 @@ export default function BookingPage() {
                 razorpay_order_id: response.razorpay_order_id, razorpay_signature: response.razorpay_signature,
                 bookingId, date: selectedDate, startTime: selectedStart, duration: selectedDuration,
                 customerName: formData.customerName, customerEmail: formData.customerEmail,
-                customerPhone: formData.customerPhone, paymentType: type }),
+                customerPhone: formData.customerPhone, paymentType: type,
+                specialRequests: formData.specialRequests }),
             });
             const cd = await cr.json();
             if (cd.success) {
@@ -175,7 +177,7 @@ export default function BookingPage() {
   const resetAll = () => {
     setStep('date'); setSelectedDate(''); setBookedRanges([]); setIsBlackout(false);
     setSelectedStart(null); setSelectedDuration(60); setBookingCancelled(false);
-    setFormData({ customerName: '', customerEmail: '', customerPhone: '', vipMember: false });
+    setFormData({ customerName: '', customerEmail: '', customerPhone: '', vipMember: false, specialRequests: '' });
     if (bookingData.bookingId) sessionStorage.removeItem(`cancelToken_${bookingData.bookingId}`);
     setBookingData({ bookingId: '', totalAmount: 0, paidAmount: 0, balanceDue: 0, paymentType: '', cancellationToken: '' });
     setConfirmError('');
@@ -382,6 +384,18 @@ export default function BookingPage() {
                 <input type="text" placeholder="Full Name" value={formData.customerName} onChange={e => setFormData(p => ({ ...p, customerName: e.target.value }))} className="w-full px-4 py-3 bg-slate-800/60 border-2 border-pink-400/40 rounded-lg text-white placeholder-pink-300/30 focus:outline-none focus:border-pink-300 transition-all" />
                 <input type="email" placeholder="Email Address" value={formData.customerEmail} onChange={e => setFormData(p => ({ ...p, customerEmail: e.target.value }))} className="w-full px-4 py-3 bg-slate-800/60 border-2 border-pink-400/40 rounded-lg text-white placeholder-pink-300/30 focus:outline-none focus:border-pink-300 transition-all" />
                 <input type="tel" placeholder="Phone Number" value={formData.customerPhone} onChange={e => setFormData(p => ({ ...p, customerPhone: e.target.value }))} className="w-full px-4 py-3 bg-slate-800/60 border-2 border-pink-400/40 rounded-lg text-white placeholder-pink-300/30 focus:outline-none focus:border-pink-300 transition-all" />
+                <div>
+                  <label className="block text-pink-300/60 text-xs mb-1">Special Requests (Optional)</label>
+                  <textarea
+                    placeholder="e.g. birthday celebration setup, water bottles, snacks, any dietary needs or anything you'd like us to know..."
+                    value={formData.specialRequests}
+                    onChange={e => { if (e.target.value.length <= 500) setFormData(p => ({ ...p, specialRequests: e.target.value })); }}
+                    rows={3}
+                    maxLength={500}
+                    className="w-full px-4 py-3 bg-slate-800/60 border-2 border-pink-400/40 rounded-lg text-white placeholder-pink-300/30 focus:outline-none focus:border-pink-300 transition-all resize-none text-sm"
+                  />
+                  <p className="text-pink-300/40 text-xs text-right mt-1">{formData.specialRequests.length}/500</p>
+                </div>
               </div>
 
               {selectedStart !== null && (

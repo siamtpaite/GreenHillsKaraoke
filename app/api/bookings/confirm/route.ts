@@ -30,6 +30,7 @@ export async function POST(request: NextRequest) {
       customerEmail,
       customerPhone,
       paymentType,
+      specialRequests,
     } = body;
 
     if (
@@ -67,7 +68,7 @@ export async function POST(request: NextRequest) {
     try {
       cancellationToken = await lockAndConfirmBooking(
         bookingId,
-        { date, startTime, duration, customerName, customerEmail, customerPhone, paymentType },
+        { date, startTime, duration, customerName, customerEmail, customerPhone, paymentType, specialRequests: specialRequests ?? '' },
         razorpay_payment_id,
         razorpay_order_id
       );
@@ -127,9 +128,9 @@ export async function POST(request: NextRequest) {
 
     console.log(`[confirm] Sending WhatsApp to customer=${customerPhone} admins=3 bookingId=${bookingId}`);
     await Promise.all([
-      sendCustomerConfirmation(customerPhone, { date, startTime, duration, balanceDue, bookingId, paymentType, customerName, totalAmount, cancellationToken })
+      sendCustomerConfirmation(customerPhone, { date, startTime, duration, balanceDue, bookingId, paymentType, customerName, totalAmount, cancellationToken, specialRequests: specialRequests ?? '' })
         .catch((e) => console.error('[confirm] Customer WA failed:', e)),
-      sendAdminBookingAlert({ guestName: customerName, customerPhone, date, startTime, duration, balanceDue, bookingId, paymentType })
+      sendAdminBookingAlert({ guestName: customerName, customerPhone, date, startTime, duration, balanceDue, bookingId, paymentType, specialRequests: specialRequests ?? '' })
         .catch((e) => console.error('[confirm] Admin WA failed:', e)),
     ]);
 

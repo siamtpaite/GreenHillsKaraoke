@@ -64,6 +64,7 @@ export async function sendCustomerConfirmation(
     customerName?: string;
     totalAmount?: number;
     cancellationToken?: string;
+    specialRequests?: string;
   }
 ) {
   const endTime = bookingDetails.startTime + bookingDetails.duration;
@@ -72,6 +73,10 @@ export async function sendCustomerConfirmation(
 
   const tokenSection = bookingDetails.cancellationToken
     ? `\n🔑 CANCELLATION TOKEN: ${bookingDetails.cancellationToken}\n(Keep this safe — required to cancel your booking)\n`
+    : '';
+
+  const srSection = bookingDetails.specialRequests?.trim()
+    ? `\n📝 Special Requests: ${bookingDetails.specialRequests.trim()}\n`
     : '';
 
   const message =
@@ -87,6 +92,7 @@ export async function sendCustomerConfirmation(
     `📋 REFUND POLICY\n` +
     `✗ ₹${DEPOSIT_AMOUNT} deposit is NON-REFUNDABLE — it locks your slot\n` +
     `✓ Remaining amount refunded at admin discretion based on cancellation reason\n` +
+    srSection +
     tokenSection + `\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
     `📋 RULES & REGULATIONS\n` +
@@ -125,12 +131,17 @@ export async function sendAdminBookingAlert(bookingDetails: {
   balanceDue: number;
   bookingId: string;
   paymentType: 'full' | 'deposit';
+  specialRequests?: string;
 }) {
   const endTime = bookingDetails.startTime + bookingDetails.duration;
   const paymentStatus =
     bookingDetails.paymentType === 'full'
       ? `FULL — ₹0 due at venue`
       : `DEPOSIT — ₹${bookingDetails.balanceDue} due at venue`;
+
+  const srLine = bookingDetails.specialRequests?.trim()
+    ? `\n📝 Special Requests: ${bookingDetails.specialRequests.trim()}`
+    : '';
 
   const message =
     `🔔 NEW BOOKING — Green Hills Karaoke\n` +
@@ -140,7 +151,8 @@ export async function sendAdminBookingAlert(bookingDetails: {
     `⏱️ Duration: ${fmtDuration(bookingDetails.duration)}\n` +
     `💳 Payment: ${paymentStatus}\n` +
     `📞 Phone: ${bookingDetails.customerPhone}\n` +
-    `🔖 Booking ID: ${bookingDetails.bookingId}`;
+    `🔖 Booking ID: ${bookingDetails.bookingId}` +
+    srLine;
 
   return Promise.allSettled(ADMIN_NUMBERS.map((n) => sendIndividual(n, message)));
 }

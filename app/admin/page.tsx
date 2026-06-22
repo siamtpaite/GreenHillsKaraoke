@@ -12,7 +12,7 @@ const ADMIN_START = 600;   // 10:00
 const ADMIN_END   = 1440;  // 24:00 (midnight)
 const ADMIN_SPAN  = ADMIN_END - ADMIN_START;
 
-type AdminTab = 'bookings' | 'analytics' | 'blackout' | 'refunds';
+type AdminTab = 'bookings' | 'analytics' | 'blackout' | 'refunds' | 'export';
 type AnalyticsPeriod = 'today' | 'week' | 'month';
 
 interface Booking {
@@ -37,6 +37,7 @@ interface Booking {
   paymentType?: 'full' | 'deposit';
   status: string;
   notes?: string;
+  specialRequests?: string;
   createdAt: any;
   checkInTime?: any;
   checkOutTime?: any;
@@ -50,7 +51,7 @@ interface OfflineForm {
   startTime: number;   // minutes from midnight
   duration: number;    // minutes
   amountPaid: number;
-  notes: string;
+  specialRequests: string;
 }
 
 interface BlackoutDate { id: string; date: string; reason: string; createdBy: string; createdAt: any; }
@@ -102,11 +103,11 @@ function fmtDate(d: string): string {
   return new Date(d + 'T12:00').toLocaleDateString('en-IN', { month: 'short', day: 'numeric' });
 }
 
-// Generate 5-min time options for admin (10 AM to 11:30 PM)
-const TIME_OPTS = Array.from(
-  { length: (ADMIN_END - ADMIN_START - 30) / 5 },
-  (_, i) => ADMIN_START + i * 5
-);
+// Generate 5-min time options for admin (10 AM to 11:55 PM, plus midnight)
+const TIME_OPTS = [
+  ...Array.from({ length: (1435 - ADMIN_START) / 5 + 1 }, (_, i) => ADMIN_START + i * 5),
+  1440,
+];
 
 const DURATION_OPTS = [
   { label: '30 min', value: 30 }, { label: '1 hr', value: 60 },
@@ -118,7 +119,7 @@ const DURATION_OPTS = [
 
 const EMPTY_FORM: OfflineForm = {
   customerName: '', customerPhone: '', customerEmail: '',
-  date: '', startTime: 14 * 60, duration: 120, amountPaid: HOURLY_RATE * 2, notes: '',
+  date: '', startTime: 14 * 60, duration: 120, amountPaid: HOURLY_RATE * 2, specialRequests: '',
 };
 
 const INPUT_CLS = 'w-full px-3 py-2 bg-slate-800/60 border border-cyan-400/30 rounded-lg text-white placeholder-cyan-300/30 focus:outline-none focus:border-cyan-300 text-sm';
@@ -168,6 +169,40 @@ export default function AdminDashboard() {
   const [pendingRefunds, setPendingRefunds] = useState<PendingRefund[]>([]);
   const [refundsLoading, setRefundsLoading] = useState(false);
   const [refundsError, setRefundsError] = useState('');
+
+  const today = new Date().toISOString().split('T')[0];
+  const firstOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+  const [exportStartDate, setExportStartDate] = useState(firstOfMonth);
+  const [exportEndDate, setExportEndDate] = useState(today);
+  const [exportLoading, setExportLoading] = useState<'' | 'csv' | 'pdf'>('');
+  const [exportError, setExportError] = useState('');
+  const [exportSuccess, setExportSuccess] = useState('');
+
+  const handleExport = async (format: 'csv' | 'pdf') => {
+    if (!exportStartDate || !exportEndDate) { setExportError('Please select both dates'); return; }
+    setExportLoading(format); setExportError(''); setExportSuccess('');
+    try {
+      const res = await fetch(
+        `/api/admin/export?startDate=${exportStartDate}&endDate=${exportEndDate}&format=${format}`,
+        { headers: { 'x-admin-password': adminToken } }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setExportError(err.error || 'Export failed — please try again');
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `GreenHills-Karaoke-Export-${exportStartDate}-to-${exportEndDate}.${format}`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setExportSuccess('Download started!');
+      setTimeout(() => setExportSuccess(''), 4000);
+    } catch { setExportError('Export failed — please try again'); }
+    finally { setExportLoading(''); }
+  };
 
   const handleLogin = async () => {
     if (!password.trim()) { setError('Enter admin password'); return; }
@@ -333,7 +368,7 @@ export default function AdminDashboard() {
     setForm({
       customerName: b.customerName, customerPhone: b.customerPhone, customerEmail: b.customerEmail ?? '',
       date: b.date, startTime: bookingStart(b), duration: bookingDuration(b),
-      amountPaid: b.paidAmount ?? b.depositPaid, notes: b.notes ?? '',
+      amountPaid: b.paidAmount ?? b.depositPaid, specialRequests: b.specialRequests ?? b.notes ?? '',
     });
     setFormError(''); setShowModal(true);
   };
@@ -460,10 +495,10 @@ export default function AdminDashboard() {
         <div className="backdrop-blur-xl bg-slate-900/40 border border-cyan-400/20 rounded-2xl shadow-2xl shadow-cyan-400/5">
           {/* Tabs */}
           <div className="flex gap-2 flex-wrap px-5 pt-5 pb-4 border-b border-slate-700/50">
-            {(['bookings','analytics','blackout','refunds'] as AdminTab[]).map(tab => (
+            {(['bookings','analytics','blackout','refunds','export'] as AdminTab[]).map(tab => (
               <button key={tab} onClick={() => setActiveTab(tab)}
                 className={`px-5 py-2 rounded-lg font-bold text-sm transition-all ${activeTab === tab ? 'bg-gradient-to-r from-cyan-500 to-pink-500 text-white shadow-lg shadow-cyan-500/30' : 'bg-slate-800/50 border border-slate-600/60 text-cyan-300/70 hover:border-slate-500 hover:text-cyan-300'}`}>
-                {tab === 'bookings' ? '📋 Bookings' : tab === 'analytics' ? '📊 Analytics' : tab === 'blackout' ? '🚫 Blackout Dates' : '💸 Pending Refunds'}
+                {tab === 'bookings' ? '📋 Bookings' : tab === 'analytics' ? '📊 Analytics' : tab === 'blackout' ? '🚫 Blackout Dates' : tab === 'refunds' ? '💸 Pending Refunds' : '📤 Export'}
               </button>
             ))}
           </div>
@@ -564,8 +599,12 @@ export default function AdminDashboard() {
                 <div className="text-xs text-slate-400 mb-3 space-y-1">
                   <p>📱 {selectedBooking.customerPhone}</p>
                   <p>📧 {selectedBooking.customerEmail || '—'}</p>
-                  {selectedBooking.notes && <p>📝 {selectedBooking.notes}</p>}
                 </div>
+                {(selectedBooking.specialRequests || selectedBooking.notes) && (
+                  <div className="mb-3 px-3 py-2 bg-amber-500/15 border border-amber-400/30 rounded-lg">
+                    <p className="text-amber-300 text-xs font-semibold">📝 Special Requests: {selectedBooking.specialRequests || selectedBooking.notes}</p>
+                  </div>
+                )}
                 <div className="flex flex-wrap gap-2">
                   {selectedBooking.status === 'confirmed' && (
                     <button onClick={() => handleCheckIn(selectedBooking.id)}
@@ -623,6 +662,11 @@ export default function AdminDashboard() {
                               {booking.status.toUpperCase()}
                             </p></div>
                         </div>
+                        {(booking.specialRequests || booking.notes) && (
+                          <div className="mt-2 px-3 py-2 bg-amber-500/15 border border-amber-400/30 rounded-lg">
+                            <p className="text-amber-300 text-xs font-semibold">📝 Special Requests: {booking.specialRequests || booking.notes}</p>
+                          </div>
+                        )}
                       </div>
                     );
                   })
@@ -764,6 +808,50 @@ export default function AdminDashboard() {
           </div>
         )}
 
+        {/* ── EXPORT TAB ── */}
+        {activeTab === 'export' && (
+          <div className="space-y-6">
+            <div className="backdrop-blur-xl bg-slate-900/40 border border-cyan-400/20 rounded-xl p-6 space-y-5">
+              <h3 className="text-cyan-300 font-black text-lg">📤 Export Bookings</h3>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className={LABEL_CLS}>Start Date</label>
+                  <input type="date" value={exportStartDate}
+                    onChange={e => setExportStartDate(e.target.value)} className={INPUT_CLS} />
+                </div>
+                <div>
+                  <label className={LABEL_CLS}>End Date</label>
+                  <input type="date" value={exportEndDate}
+                    onChange={e => setExportEndDate(e.target.value)} className={INPUT_CLS} />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                <button onClick={() => handleExport('csv')} disabled={exportLoading !== ''}
+                  className="flex items-center gap-2 bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 disabled:opacity-50 text-white font-bold px-6 py-2.5 rounded-lg text-sm shadow-lg shadow-emerald-500/20 transition-all">
+                  {exportLoading === 'csv' ? (
+                    <><span className="animate-spin">⏳</span> Preparing CSV…</>
+                  ) : '⬇️ Download CSV'}
+                </button>
+                <button onClick={() => handleExport('pdf')} disabled={exportLoading !== ''}
+                  className="flex items-center gap-2 bg-gradient-to-r from-pink-500 to-violet-500 hover:from-pink-400 hover:to-violet-400 disabled:opacity-50 text-white font-bold px-6 py-2.5 rounded-lg text-sm shadow-lg shadow-pink-500/20 transition-all">
+                  {exportLoading === 'pdf' ? (
+                    <><span className="animate-spin">⏳</span> Preparing PDF…</>
+                  ) : '⬇️ Download PDF'}
+                </button>
+              </div>
+
+              {exportError && (
+                <div className="p-3 bg-pink-500/15 border border-pink-400/40 rounded-lg text-pink-300 text-sm">{exportError}</div>
+              )}
+              {exportSuccess && (
+                <div className="p-3 bg-emerald-500/15 border border-emerald-400/40 rounded-lg text-emerald-300 text-sm">✅ {exportSuccess}</div>
+              )}
+            </div>
+          </div>
+        )}
+
           </div>{/* /p-5 */}
         </div>{/* /main card */}
       </div>
@@ -831,9 +919,18 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
-              <div><label className={LABEL_CLS}>Notes</label>
-                <input type="text" placeholder="Any special requests…" value={form.notes}
-                  onChange={e => setField('notes', e.target.value)} className={INPUT_CLS} /></div>
+              <div>
+                <label className={LABEL_CLS}>Special Requests (Optional)</label>
+                <textarea
+                  placeholder="e.g. birthday celebration setup, water bottles, snacks, any dietary needs…"
+                  value={form.specialRequests}
+                  onChange={e => { if (e.target.value.length <= 500) setField('specialRequests', e.target.value); }}
+                  rows={3}
+                  maxLength={500}
+                  className={INPUT_CLS + ' resize-none'}
+                />
+                <p className="text-pink-300/40 text-xs text-right mt-1">{form.specialRequests.length}/500</p>
+              </div>
 
               {conflict && (
                 <div className="p-3 bg-yellow-500/15 border border-yellow-400/40 rounded-lg text-yellow-300 text-sm">⚠️ {conflict}</div>

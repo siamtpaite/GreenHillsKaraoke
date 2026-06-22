@@ -76,6 +76,7 @@ export async function lockAndConfirmBooking(
       razorpayPaymentId,
       razorpayOrderId,
       cancellationToken,
+      specialRequests: req.specialRequests ?? '',
       createdAt: FieldValue.serverTimestamp(),
     } as unknown as Partial<Booking>);
   });

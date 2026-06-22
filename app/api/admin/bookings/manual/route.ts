@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
   }
   try {
     const body = await req.json();
-    const { date, startTime: rawStartTime, duration: rawDuration, customerName, customerPhone, customerEmail, amountPaid, paymentType, notes } = body;
+    const { date, startTime: rawStartTime, duration: rawDuration, customerName, customerPhone, customerEmail, amountPaid, paymentType, notes, specialRequests } = body;
 
     const startTime = rawStartTime !== undefined ? Number(rawStartTime) : undefined;
     const duration = rawDuration !== undefined ? Number(rawDuration) : undefined;
@@ -97,16 +97,17 @@ export async function POST(req: NextRequest) {
         depositPaid: paidAmount,
         amountDue: balanceDue,
         status: 'confirmed',
-        notes: notes || '',
+        specialRequests: specialRequests ?? notes ?? '',
         cancellationToken,
         createdAt: FieldValue.serverTimestamp(),
         createdBy: 'admin',
       });
     });
 
+    const resolvedSpecialRequests = specialRequests ?? notes ?? '';
     const waResults = await Promise.allSettled([
-      sendAdminBookingAlert({ guestName: customerName, customerPhone, date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType }),
-      sendCustomerConfirmation(customerPhone, { date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType, customerName, totalAmount, cancellationToken }),
+      sendAdminBookingAlert({ guestName: customerName, customerPhone, date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType, specialRequests: resolvedSpecialRequests }),
+      sendCustomerConfirmation(customerPhone, { date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType, customerName, totalAmount, cancellationToken, specialRequests: resolvedSpecialRequests }),
     ]);
     if (waResults[0].status === 'rejected') console.error('[Manual Booking] Admin WA failed:', waResults[0].reason);
     if (waResults[1].status === 'rejected') console.error('[Manual Booking] Customer WA failed:', waResults[1].reason);
@@ -142,7 +143,7 @@ export async function PUT(req: NextRequest) {
   }
   try {
     const body = await req.json();
-    const { bookingId, date, startTime: rawStartTime, duration: rawDuration, customerName, customerPhone, customerEmail, amountPaid, notes } = body;
+    const { bookingId, date, startTime: rawStartTime, duration: rawDuration, customerName, customerPhone, customerEmail, amountPaid, notes, specialRequests } = body;
 
     if (!bookingId) {
       return NextResponse.json(
@@ -225,7 +226,8 @@ export async function PUT(req: NextRequest) {
       if (customerName !== undefined) updates.customerName = customerName;
       if (customerPhone !== undefined) updates.customerPhone = customerPhone;
       if (customerEmail !== undefined) updates.customerEmail = customerEmail;
-      if (notes !== undefined) updates.notes = notes;
+      const updatedSpecialRequests = specialRequests ?? notes;
+      if (updatedSpecialRequests !== undefined) updates.specialRequests = updatedSpecialRequests;
 
       tx.update(bookingRef, updates);
     });

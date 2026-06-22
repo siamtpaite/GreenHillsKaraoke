@@ -32,6 +32,7 @@ export interface Booking {
   checkOutTime?: Date;
   cancelledAt?: Date;
   notes?: string;
+  specialRequests?: string;
 }
 
 // Availability response — booked time ranges for a date
@@ -54,6 +55,7 @@ export interface BookingRequest {
   customerEmail: string;
   customerPhone: string;
   paymentType: 'full' | 'deposit';
+  specialRequests?: string;
 }
 
 // Razorpay order response
