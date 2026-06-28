@@ -742,6 +742,13 @@ export default function AdminDashboard() {
                             </span>
                           )}
                         </div>
+                        <div className="mt-3 pt-3 border-t border-slate-700/50 text-xs text-slate-400 space-y-1">
+                          {booking.createdBy === 'admin' && (
+                            <p className="text-orange-400 font-bold">📵 OFFLINE BOOKING</p>
+                          )}
+                          <p>📱 {booking.customerPhone}</p>
+                          <p>📧 {booking.customerEmail || '—'}</p>
+                        </div>
                       </div>
                     );
                   })
