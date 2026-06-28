@@ -5,14 +5,14 @@ import { ApiResponse } from '@/lib/types';
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { bookingId: string } }
+  { params }: { params: Promise<{ bookingId: string }> }
 ) {
   const pw = process.env.ADMIN_PASSWORD;
   if (!pw || request.headers.get('x-admin-password') !== pw) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   }
 
-  const { bookingId } = params;
+  const { bookingId } = await params;
   const snap = await adminDb.doc(`bookings/${bookingId}`).get();
   if (!snap.exists) {
     return NextResponse.json(
