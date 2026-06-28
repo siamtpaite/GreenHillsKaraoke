@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { lockAndConfirmBooking, getBooking } from '@/lib/booking/service';
 import { adminDb } from '@/lib/firebase/admin';
 import { FieldValue } from 'firebase-admin/firestore';
-import { verifyPaymentSignature, refundPayment } from '@/lib/payment/razorpay';
+import { verifyPaymentSignature, refundPayment, getPaymentDetails } from '@/lib/payment/razorpay';
 import { sendCustomerConfirmation, sendAdminBookingAlert } from '@/lib/whatsapp/baileys-send';
 import { ApiResponse } from '@/lib/types';
 
@@ -61,6 +61,44 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: 'Payment order does not match this booking' } as ApiResponse<null>,
         { status: 401 }
+      );
+    }
+
+    // Verify via Razorpay API that the payment was actually captured at the correct amount
+    const totalAmount = Math.ceil(duration / 60) * HOURLY_RATE;
+    const expectedPaise = paymentType === 'full' ? totalAmount * 100 : DEPOSIT_AMOUNT * 100;
+    let paymentDetails: any;
+    try {
+      paymentDetails = await getPaymentDetails(razorpay_payment_id);
+    } catch (fetchErr) {
+      console.error(`[confirm] Failed to fetch payment details for ${razorpay_payment_id}:`, fetchErr);
+      return NextResponse.json(
+        { success: false, error: 'Could not verify payment with Razorpay' } as ApiResponse<null>,
+        { status: 502 }
+      );
+    }
+
+    if (paymentDetails.status !== 'captured' && paymentDetails.status !== 'authorized') {
+      console.error(`[confirm] Payment ${razorpay_payment_id} status is ${paymentDetails.status} — not captured`);
+      return NextResponse.json(
+        { success: false, error: 'Payment has not been captured. Please complete payment before confirming.' } as ApiResponse<null>,
+        { status: 402 }
+      );
+    }
+
+    if (paymentDetails.order_id !== razorpay_order_id) {
+      console.error(`[confirm] Payment ${razorpay_payment_id} order mismatch: got ${paymentDetails.order_id}, expected ${razorpay_order_id}`);
+      return NextResponse.json(
+        { success: false, error: 'Payment order mismatch' } as ApiResponse<null>,
+        { status: 401 }
+      );
+    }
+
+    if (paymentDetails.amount < expectedPaise) {
+      console.error(`[confirm] Payment ${razorpay_payment_id} amount ${paymentDetails.amount} paise is less than expected ${expectedPaise} paise`);
+      return NextResponse.json(
+        { success: false, error: 'Payment amount is less than the required amount' } as ApiResponse<null>,
+        { status: 402 }
       );
     }
 
@@ -123,7 +161,6 @@ export async function POST(request: NextRequest) {
 
     console.log(`[confirm] ✓ Booking ${bookingId} confirmed — ${date} ${duration}min for ${customerName}`);
 
-    const totalAmount = Math.ceil(duration / 60) * HOURLY_RATE;
     const balanceDue = paymentType === 'full' ? 0 : totalAmount - DEPOSIT_AMOUNT;
 
     console.log(`[confirm] Sending WhatsApp to customer=${customerPhone} admins=3 bookingId=${bookingId}`);

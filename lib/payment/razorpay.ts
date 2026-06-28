@@ -2,13 +2,8 @@ import Razorpay from 'razorpay';
 import crypto from 'crypto';
 
 function getCredentials() {
-  const keyId =
-    process.env.TEST_NEXT_PUBLIC_RAZORPAY_KEY_ID ||
-    process.env.RAZORPAY_KEY_ID ||
-    process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
-  const keySecret =
-    process.env.TEST_RAZORPAY_KEY_SECRET ||
-    process.env.RAZORPAY_KEY_SECRET;
+  const keyId = process.env.RAZORPAY_KEY_ID || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
   return { keyId, keySecret };
 }
 

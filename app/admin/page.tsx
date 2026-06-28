@@ -41,6 +41,7 @@ interface Booking {
   createdAt: any;
   checkInTime?: any;
   checkOutTime?: any;
+  createdBy?: string;
 }
 
 interface OfflineForm {
@@ -119,7 +120,7 @@ const DURATION_OPTS = [
 
 const EMPTY_FORM: OfflineForm = {
   customerName: '', customerPhone: '', customerEmail: '',
-  date: '', startTime: 14 * 60, duration: 120, amountPaid: HOURLY_RATE * 2, specialRequests: '',
+  date: '', startTime: 14 * 60, duration: 120, amountPaid: 0, specialRequests: '',
 };
 
 const INPUT_CLS = 'w-full px-3 py-2 bg-slate-800/60 border border-cyan-400/30 rounded-lg text-white placeholder-cyan-300/30 focus:outline-none focus:border-cyan-300 text-sm';
@@ -146,6 +147,8 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
+  const [waResendLoading, setWaResendLoading] = useState(false);
+  const [waResendResult, setWaResendResult] = useState<{ adminSent: boolean; customerSent: boolean } | null>(null);
 
   const [showModal, setShowModal] = useState(false);
   const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
@@ -403,6 +406,19 @@ export default function AdminDashboard() {
     finally { setFormLoading(false); }
   };
 
+  const handleResendWa = async (bookingId: string) => {
+    setWaResendLoading(true); setWaResendResult(null);
+    try {
+      const res = await fetch(`/api/admin/bookings/${bookingId}/resend-wa`, {
+        method: 'POST', headers: { 'x-admin-password': adminToken },
+      });
+      const data = await res.json();
+      if (data.success) setWaResendResult(data.data);
+      else setError(data.error || 'Failed to resend WA');
+    } catch { setError('Error resending WA'); }
+    finally { setWaResendLoading(false); }
+  };
+
   const handleCheckIn = async (bookingId: string) => {
     try {
       const res = await fetch(`/api/admin/bookings/${bookingId}/checkin`, {
@@ -430,9 +446,11 @@ export default function AdminDashboard() {
         method: 'POST', headers: { 'x-admin-password': adminToken },
       });
       const data = await res.json();
-      if (data.success) { setSelectedBooking(null); fetchBookings(); } else setError('Cancellation failed');
+      if (data.success) { selectBooking(null); fetchBookings(); } else setError('Cancellation failed');
     } catch { setError('Error cancelling booking'); }
   };
+
+  const selectBooking = (b: Booking | null) => { setSelectedBooking(b); setWaResendResult(null); };
 
   // Active bookings for the timeline
   const activeBookings = bookings.filter(b => !['cancelled'].includes(b.status));
@@ -553,7 +571,7 @@ export default function AdminDashboard() {
                     const colors = bookingColor(b);
                     return (
                       <button key={b.id}
-                        onClick={() => setSelectedBooking(selectedBooking?.id === b.id ? null : b)}
+                        onClick={() => selectBooking(selectedBooking?.id === b.id ? null : b)}
                         className={`absolute top-0 h-full ${colors.bg} border-l-2 border-r ${colors.border} flex items-center px-1 hover:brightness-110 transition-all ${selectedBooking?.id === b.id ? 'ring-2 ring-white/40' : ''}`}
                         style={{ left: pctL(visStart), width: pctW(visEnd - visStart) }}
                         title={`${b.customerName} · ${minutesToTime(bStart)} – ${minutesToTime(bEnd)}`}>
@@ -577,8 +595,13 @@ export default function AdminDashboard() {
             {selectedBooking && (
               <div className="mb-4 backdrop-blur-xl bg-slate-900/40 border border-violet-400/30 rounded-xl p-5">
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-violet-300 font-black">{selectedBooking.customerName}</h3>
-                  <button onClick={() => setSelectedBooking(null)} className="text-slate-400 hover:text-white text-lg">✕</button>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-violet-300 font-black">{selectedBooking.customerName}</h3>
+                    {selectedBooking.createdBy === 'admin' && (
+                      <span className="px-2 py-0.5 bg-amber-500/20 border border-amber-400/40 rounded text-amber-300 text-xs font-bold">📵 OFFLINE</span>
+                    )}
+                  </div>
+                  <button onClick={() => selectBooking(null)} className="text-slate-400 hover:text-white text-lg">✕</button>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-4">
                   <div><p className="text-slate-400 text-xs">Time</p>
@@ -603,6 +626,16 @@ export default function AdminDashboard() {
                 {(selectedBooking.specialRequests || selectedBooking.notes) && (
                   <div className="mb-3 px-3 py-2 bg-amber-500/15 border border-amber-400/30 rounded-lg">
                     <p className="text-amber-300 text-xs font-semibold">📝 Special Requests: {selectedBooking.specialRequests || selectedBooking.notes}</p>
+                  </div>
+                )}
+                {waResendResult && (
+                  <div className="mb-3 px-3 py-2 bg-slate-800/60 border border-slate-600/60 rounded-lg text-xs space-y-0.5">
+                    <p className={waResendResult.adminSent ? 'text-green-400' : 'text-red-400'}>
+                      {waResendResult.adminSent ? '✓ Admin WA sent' : '✗ Admin WA failed'}
+                    </p>
+                    <p className={waResendResult.customerSent ? 'text-green-400' : 'text-red-400'}>
+                      {waResendResult.customerSent ? '✓ Customer WA sent' : '✗ Customer WA failed'}
+                    </p>
                   </div>
                 )}
                 <div className="flex flex-wrap gap-2">
@@ -630,6 +663,10 @@ export default function AdminDashboard() {
                       </button>
                     </>
                   )}
+                  <button onClick={() => handleResendWa(selectedBooking.id)} disabled={waResendLoading}
+                    className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 border border-slate-500 text-cyan-300 px-4 py-2 rounded-lg font-bold text-sm transition-all">
+                    {waResendLoading ? '⏳ Sending…' : '📲 Resend WA'}
+                  </button>
                 </div>
               </div>
             )}
@@ -648,7 +685,7 @@ export default function AdminDashboard() {
                     return (
                       <div key={booking.id}
                         className={`backdrop-blur-xl bg-slate-900/40 border rounded-xl p-5 hover:border-cyan-400/40 transition-all cursor-pointer ${selectedBooking?.id === booking.id ? 'border-violet-400/50' : 'border-cyan-400/20'}`}
-                        onClick={() => setSelectedBooking(selectedBooking?.id === booking.id ? null : booking)}>
+                        onClick={() => selectBooking(selectedBooking?.id === booking.id ? null : booking)}>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
                           <div><p className="text-slate-400 text-xs">Guest</p><p className="text-white font-bold">{booking.customerName}</p></div>
                           <div><p className="text-slate-400 text-xs">Time</p>
@@ -891,7 +928,7 @@ export default function AdminDashboard() {
                       const st = Number(e.target.value);
                       const maxDur = Math.min(480, ADMIN_END - st);
                       const safeDur = Math.min(form.duration, maxDur);
-                      setForm(p => ({ ...p, startTime: st, duration: safeDur, ...(!editingBooking ? { amountPaid: Math.ceil(safeDur / 60) * HOURLY_RATE } : {}) }));
+                      setForm(p => ({ ...p, startTime: st, duration: safeDur }));
                     }}
                     className={INPUT_CLS}>
                     {TIME_OPTS.map(m => <option key={m} value={m}>{minutesToTime(m)}</option>)}
@@ -904,7 +941,7 @@ export default function AdminDashboard() {
                   <select value={form.duration}
                     onChange={e => {
                       const dur = Number(e.target.value);
-                      setForm(p => ({ ...p, duration: dur, ...(!editingBooking ? { amountPaid: Math.ceil(dur / 60) * HOURLY_RATE } : {}) }));
+                      setForm(p => ({ ...p, duration: dur }));
                     }}
                     className={INPUT_CLS}>
                     {DURATION_OPTS.filter(o => form.startTime + o.value <= ADMIN_END).map(o => (
@@ -913,7 +950,7 @@ export default function AdminDashboard() {
                   </select>
                 </div>
                 <div>
-                  <label className={LABEL_CLS}>Amount Paid <span className="text-cyan-300/30 ml-1">exp ₹{expectedTotal}</span></label>
+                  <label className={LABEL_CLS}>Amount Actually Received <span className="text-cyan-300/30 ml-1">(total ₹{expectedTotal})</span></label>
                   <input type="number" min={0} step={100} value={form.amountPaid}
                     onChange={e => setField('amountPaid', Number(e.target.value))} className={INPUT_CLS} />
                 </div>

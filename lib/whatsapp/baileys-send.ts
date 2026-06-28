@@ -69,7 +69,26 @@ export async function sendCustomerConfirmation(
 ) {
   const endTime = bookingDetails.startTime + bookingDetails.duration;
   const guestName = bookingDetails.customerName ?? 'Guest';
-  const totalPaid = (bookingDetails.totalAmount ?? 0) - bookingDetails.balanceDue;
+  const total = bookingDetails.totalAmount ?? 0;
+  const totalPaid = total - bookingDetails.balanceDue;
+
+  let paymentSummary: string;
+  if (bookingDetails.balanceDue <= 0) {
+    paymentSummary =
+      `💰 PAYMENT SUMMARY\n` +
+      `Total Paid: ₹${total}\n` +
+      `Balance Due: ₹0 — Nothing due at check-in\n\n`;
+  } else if (totalPaid >= DEPOSIT_AMOUNT) {
+    paymentSummary =
+      `💰 PAYMENT SUMMARY\n` +
+      `Deposit Paid (Non-Refundable): ₹${totalPaid}\n` +
+      `Remaining Balance Due at Check-in: ₹${bookingDetails.balanceDue}\n\n`;
+  } else {
+    paymentSummary =
+      `💰 PAYMENT SUMMARY\n` +
+      `Amount Paid: ₹${totalPaid}\n` +
+      `Total Due at Check-in: ₹${bookingDetails.balanceDue}\n\n`;
+  }
 
   const tokenSection = bookingDetails.cancellationToken
     ? `\n🔑 CANCELLATION TOKEN: ${bookingDetails.cancellationToken}\n(Keep this safe — required to cancel your booking)\n`
@@ -85,13 +104,12 @@ export async function sendCustomerConfirmation(
     `Date & Time: ${bookingDetails.date} | ${fmtTime(bookingDetails.startTime)} – ${fmtTime(endTime)}\n` +
     `Guest Name: ${guestName}\n` +
     `Duration: ${fmtDuration(bookingDetails.duration)}\n\n` +
-    `💰 PAYMENT SUMMARY\n` +
-    `Deposit (Non-Refundable): ₹${DEPOSIT_AMOUNT}\n` +
-    `Remaining Amount: ₹${bookingDetails.balanceDue}\n` +
-    `Total Paid: ₹${totalPaid}\n\n` +
+    paymentSummary +
     `📋 REFUND POLICY\n` +
-    `✗ ₹${DEPOSIT_AMOUNT} deposit is NON-REFUNDABLE — it locks your slot\n` +
-    `✓ Remaining amount refunded at admin discretion based on cancellation reason\n` +
+    (totalPaid > 0
+      ? `✗ ₹${Math.min(totalPaid, DEPOSIT_AMOUNT)} of amount paid is NON-REFUNDABLE\n` +
+        `✓ Remaining refunded at admin discretion based on cancellation reason\n`
+      : `✓ Cancellation policy applies — contact admin for details\n`) +
     srSection +
     tokenSection + `\n` +
     `━━━━━━━━━━━━━━━━━━━━\n` +
@@ -132,6 +150,7 @@ export async function sendAdminBookingAlert(bookingDetails: {
   bookingId: string;
   paymentType: 'full' | 'deposit';
   specialRequests?: string;
+  isOffline?: boolean;
 }) {
   const endTime = bookingDetails.startTime + bookingDetails.duration;
   const paymentStatus =
@@ -143,8 +162,11 @@ export async function sendAdminBookingAlert(bookingDetails: {
     ? `\n📝 Special Requests: ${bookingDetails.specialRequests.trim()}`
     : '';
 
+  const offlineBadge = bookingDetails.isOffline ? `📵 OFFLINE BOOKING (Admin Created)\n` : '';
+
   const message =
     `🔔 NEW BOOKING — Green Hills Karaoke\n` +
+    offlineBadge +
     `👤 Guest: ${bookingDetails.guestName}\n` +
     `📅 Date: ${bookingDetails.date}\n` +
     `⏰ Time: ${fmtTime(bookingDetails.startTime)} – ${fmtTime(endTime)}\n` +

@@ -106,7 +106,7 @@ export async function POST(req: NextRequest) {
 
     const resolvedSpecialRequests = specialRequests ?? notes ?? '';
     const waResults = await Promise.allSettled([
-      sendAdminBookingAlert({ guestName: customerName, customerPhone, date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType, specialRequests: resolvedSpecialRequests }),
+      sendAdminBookingAlert({ guestName: customerName, customerPhone, date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType, specialRequests: resolvedSpecialRequests, isOffline: true }),
       sendCustomerConfirmation(customerPhone, { date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType, customerName, totalAmount, cancellationToken, specialRequests: resolvedSpecialRequests }),
     ]);
     if (waResults[0].status === 'rejected') console.error('[Manual Booking] Admin WA failed:', waResults[0].reason);
