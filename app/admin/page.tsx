@@ -147,8 +147,8 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
-  const [waResendLoading, setWaResendLoading] = useState(false);
-  const [waResendResult, setWaResendResult] = useState<{ adminSent: boolean; customerSent: boolean } | null>(null);
+  const [waResendingId, setWaResendingId] = useState<string | null>(null);
+  const [waResendResults, setWaResendResults] = useState<Record<string, { adminSent: boolean; customerSent: boolean }>>({});
 
   const [showModal, setShowModal] = useState(false);
   const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
@@ -406,17 +406,19 @@ export default function AdminDashboard() {
     finally { setFormLoading(false); }
   };
 
-  const handleResendWa = async (bookingId: string) => {
-    setWaResendLoading(true); setWaResendResult(null);
+  const handleResendWa = async (bookingId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setWaResendingId(bookingId);
+    setWaResendResults(prev => { const n = { ...prev }; delete n[bookingId]; return n; });
     try {
       const res = await fetch(`/api/admin/bookings/${bookingId}/resend-wa`, {
         method: 'POST', headers: { 'x-admin-password': adminToken },
       });
       const data = await res.json();
-      if (data.success) setWaResendResult(data.data);
+      if (data.success) setWaResendResults(prev => ({ ...prev, [bookingId]: data.data }));
       else setError(data.error || 'Failed to resend WA');
     } catch { setError('Error resending WA'); }
-    finally { setWaResendLoading(false); }
+    finally { setWaResendingId(null); }
   };
 
   const handleCheckIn = async (bookingId: string) => {
@@ -450,7 +452,7 @@ export default function AdminDashboard() {
     } catch { setError('Error cancelling booking'); }
   };
 
-  const selectBooking = (b: Booking | null) => { setSelectedBooking(b); setWaResendResult(null); };
+  const selectBooking = (b: Booking | null) => { setSelectedBooking(b); };
 
   // Active bookings for the timeline
   const activeBookings = bookings.filter(b => !['cancelled'].includes(b.status));
@@ -628,16 +630,6 @@ export default function AdminDashboard() {
                     <p className="text-amber-300 text-xs font-semibold">📝 Special Requests: {selectedBooking.specialRequests || selectedBooking.notes}</p>
                   </div>
                 )}
-                {waResendResult && (
-                  <div className="mb-3 px-3 py-2 bg-slate-800/60 border border-slate-600/60 rounded-lg text-xs space-y-0.5">
-                    <p className={waResendResult.adminSent ? 'text-green-400' : 'text-red-400'}>
-                      {waResendResult.adminSent ? '✓ Admin WA sent' : '✗ Admin WA failed'}
-                    </p>
-                    <p className={waResendResult.customerSent ? 'text-green-400' : 'text-red-400'}>
-                      {waResendResult.customerSent ? '✓ Customer WA sent' : '✗ Customer WA failed'}
-                    </p>
-                  </div>
-                )}
                 <div className="flex flex-wrap gap-2">
                   {selectedBooking.status === 'confirmed' && (
                     <button onClick={() => handleCheckIn(selectedBooking.id)}
@@ -663,10 +655,6 @@ export default function AdminDashboard() {
                       </button>
                     </>
                   )}
-                  <button onClick={() => handleResendWa(selectedBooking.id)} disabled={waResendLoading}
-                    className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 border border-slate-500 text-cyan-300 px-4 py-2 rounded-lg font-bold text-sm transition-all">
-                    {waResendLoading ? '⏳ Sending…' : '📲 Resend WA'}
-                  </button>
                 </div>
               </div>
             )}
@@ -704,6 +692,24 @@ export default function AdminDashboard() {
                             <p className="text-amber-300 text-xs font-semibold">📝 Special Requests: {booking.specialRequests || booking.notes}</p>
                           </div>
                         )}
+                        <div className="mt-3 flex items-center gap-3" onClick={e => e.stopPropagation()}>
+                          <button
+                            onClick={e => handleResendWa(booking.id, e)}
+                            disabled={waResendingId === booking.id}
+                            className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 border border-slate-500/60 text-cyan-300 px-3 py-1.5 rounded-lg font-bold text-xs transition-all">
+                            {waResendingId === booking.id ? '⏳ Sending…' : '📲 Resend WA'}
+                          </button>
+                          {waResendResults[booking.id] && (
+                            <span className="text-xs space-x-2">
+                              <span className={waResendResults[booking.id].adminSent ? 'text-green-400' : 'text-red-400'}>
+                                {waResendResults[booking.id].adminSent ? '✓ Admins' : '✗ Admins'}
+                              </span>
+                              <span className={waResendResults[booking.id].customerSent ? 'text-green-400' : 'text-red-400'}>
+                                {waResendResults[booking.id].customerSent ? '✓ Customer' : '✗ Customer'}
+                              </span>
+                            </span>
+                          )}
+                        </div>
                       </div>
                     );
                   })
