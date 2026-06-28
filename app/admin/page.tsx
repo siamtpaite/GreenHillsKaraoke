@@ -53,6 +53,8 @@ interface OfflineForm {
   duration: number;    // minutes
   amountPaid: number;
   specialRequests: string;
+  overridePhone: string;
+  paymentNote: string;
 }
 
 interface BlackoutDate { id: string; date: string; reason: string; createdBy: string; createdAt: any; }
@@ -120,7 +122,7 @@ const DURATION_OPTS = [
 
 const EMPTY_FORM: OfflineForm = {
   customerName: '', customerPhone: '', customerEmail: '',
-  date: '', startTime: 14 * 60, duration: 120, amountPaid: 0, specialRequests: '',
+  date: '', startTime: 14 * 60, duration: 120, amountPaid: 0, specialRequests: '', overridePhone: '', paymentNote: '',
 };
 
 const INPUT_CLS = 'w-full px-3 py-2 bg-slate-800/60 border border-cyan-400/30 rounded-lg text-white placeholder-cyan-300/30 focus:outline-none focus:border-cyan-300 text-sm';
@@ -383,6 +385,10 @@ export default function AdminDashboard() {
     if (!form.customerName.trim()) { setFormError('Guest name is required'); return; }
     if (!/^\d{10}$/.test(form.customerPhone.replace(/[^\d]/g, ''))) { setFormError('Enter a valid 10-digit phone number'); return; }
     if (!form.date) { setFormError('Date is required'); return; }
+    if (!editingBooking && Number(form.amountPaid) < DEPOSIT_AMOUNT) {
+      if (!form.paymentNote.trim()) { setFormError('Payment arrangement note is required when no advance is collected'); return; }
+      if (!/^\d{10}$/.test(form.overridePhone.replace(/[^\d]/g, ''))) { setFormError('Enter your 10-digit admin WhatsApp number to authorize this slot lock'); return; }
+    }
     setFormLoading(true); setFormError('');
     try {
       const payload = {
@@ -961,6 +967,34 @@ export default function AdminDashboard() {
                     onChange={e => setField('amountPaid', Number(e.target.value))} className={INPUT_CLS} />
                 </div>
               </div>
+
+              {!editingBooking && Number(form.amountPaid) < DEPOSIT_AMOUNT && (
+                <div className="p-4 bg-orange-500/10 border border-orange-400/40 rounded-lg space-y-3">
+                  <p className="text-orange-300 text-xs font-bold">⚠️ No advance payment — Admin override required to lock this slot</p>
+                  <div>
+                    <label className={LABEL_CLS}>Payment Arrangement Note *</label>
+                    <textarea
+                      placeholder="e.g. Regular customer, will pay on arrival. Event pre-arranged with management."
+                      value={form.paymentNote}
+                      onChange={e => setField('paymentNote', e.target.value)}
+                      rows={2}
+                      className={INPUT_CLS + ' resize-none'}
+                    />
+                  </div>
+                  <div>
+                    <label className={LABEL_CLS}>Your Admin WhatsApp Number (10 digits) *</label>
+                    <input
+                      type="tel"
+                      maxLength={10}
+                      placeholder="e.g. 8787633291"
+                      value={form.overridePhone}
+                      onChange={e => setField('overridePhone', e.target.value.replace(/[^\d]/g, '').slice(0, 10))}
+                      className={INPUT_CLS}
+                    />
+                    <p className="text-orange-300/50 text-xs mt-1">Must match a registered admin number — included in the WA alert sent to all admins</p>
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className={LABEL_CLS}>Special Requests (Optional)</label>

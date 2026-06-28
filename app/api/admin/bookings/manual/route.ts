@@ -13,6 +13,10 @@ const DEPOSIT_AMOUNT = parseInt(process.env.NEXT_PUBLIC_DEPOSIT_AMOUNT || '500')
 const ADMIN_START = 600;
 const ADMIN_END = 1440;
 
+// Registered admin 10-digit WhatsApp numbers (set ADMIN_PHONES env var to override)
+const ADMIN_PHONES: string[] = (process.env.ADMIN_PHONES || '9089402122,8413853992,7085766889,8787633291')
+  .split(',').map(p => p.trim().replace(/\D/g, '').slice(-10)).filter(Boolean);
+
 /**
  * POST /api/admin/bookings/manual
  * Create a confirmed booking without payment (walk-in / admin override).
@@ -26,7 +30,7 @@ export async function POST(req: NextRequest) {
   }
   try {
     const body = await req.json();
-    const { date, startTime: rawStartTime, duration: rawDuration, customerName, customerPhone, customerEmail, amountPaid, paymentType, notes, specialRequests } = body;
+    const { date, startTime: rawStartTime, duration: rawDuration, customerName, customerPhone, customerEmail, amountPaid, paymentType, notes, specialRequests, overridePhone, paymentNote } = body;
 
     const startTime = rawStartTime !== undefined ? Number(rawStartTime) : undefined;
     const duration = rawDuration !== undefined ? Number(rawDuration) : undefined;
@@ -56,6 +60,17 @@ export async function POST(req: NextRequest) {
     const endTime = startTime + duration;
     const totalAmount = Math.ceil(duration / 60) * HOURLY_RATE;
     const paidAmount = amountPaid !== undefined ? Number(amountPaid) : totalAmount;
+
+    // If no advance payment, require a registered admin phone for accountability
+    if (paidAmount < DEPOSIT_AMOUNT) {
+      const phone10 = (overridePhone ?? '').replace(/\D/g, '').slice(-10);
+      if (!ADMIN_PHONES.includes(phone10)) {
+        return NextResponse.json(
+          { success: false, error: 'Admin phone number not recognized. Enter your registered WhatsApp number to authorize this slot lock.' } as ApiResponse<null>,
+          { status: 403 }
+        );
+      }
+    }
     const balanceDue = Math.max(0, totalAmount - paidAmount);
     const resolvedPaymentType: 'full' | 'deposit' =
       paymentType === 'full' || paymentType === 'deposit'
@@ -101,12 +116,17 @@ export async function POST(req: NextRequest) {
         cancellationToken,
         createdAt: FieldValue.serverTimestamp(),
         createdBy: 'admin',
+        ...(paidAmount < DEPOSIT_AMOUNT ? {
+          overrideBy: (overridePhone ?? '').replace(/\D/g, '').slice(-10),
+          paymentNote: paymentNote ?? '',
+        } : {}),
       });
     });
 
     const resolvedSpecialRequests = specialRequests ?? notes ?? '';
+    const overrideBy = paidAmount < DEPOSIT_AMOUNT ? (overridePhone ?? '').replace(/\D/g, '').slice(-10) : undefined;
     const waResults = await Promise.allSettled([
-      sendAdminBookingAlert({ guestName: customerName, customerPhone, date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType, specialRequests: resolvedSpecialRequests, isOffline: true }),
+      sendAdminBookingAlert({ guestName: customerName, customerPhone, date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType, specialRequests: resolvedSpecialRequests, isOffline: true, overrideBy, paymentNote: overrideBy ? (paymentNote ?? '') : undefined }),
       sendCustomerConfirmation(customerPhone, { date, startTime, duration, balanceDue, bookingId, paymentType: resolvedPaymentType, customerName, totalAmount, cancellationToken, specialRequests: resolvedSpecialRequests }),
     ]);
     if (waResults[0].status === 'rejected') console.error('[Manual Booking] Admin WA failed:', waResults[0].reason);

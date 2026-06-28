@@ -151,6 +151,8 @@ export async function sendAdminBookingAlert(bookingDetails: {
   paymentType: 'full' | 'deposit';
   specialRequests?: string;
   isOffline?: boolean;
+  overrideBy?: string;
+  paymentNote?: string;
 }) {
   const endTime = bookingDetails.startTime + bookingDetails.duration;
   const paymentStatus =
@@ -164,9 +166,15 @@ export async function sendAdminBookingAlert(bookingDetails: {
 
   const offlineBadge = bookingDetails.isOffline ? `📵 OFFLINE BOOKING (Admin Created)\n` : '';
 
+  const overrideLine = bookingDetails.overrideBy
+    ? `⚠️ NO ADVANCE PAYMENT\n🔐 Override by: +91${bookingDetails.overrideBy}\n` +
+      (bookingDetails.paymentNote?.trim() ? `📋 Reason: ${bookingDetails.paymentNote.trim()}\n` : '')
+    : '';
+
   const message =
     `🔔 NEW BOOKING — Green Hills Karaoke\n` +
     offlineBadge +
+    overrideLine +
     `👤 Guest: ${bookingDetails.guestName}\n` +
     `📅 Date: ${bookingDetails.date}\n` +
     `⏰ Time: ${fmtTime(bookingDetails.startTime)} – ${fmtTime(endTime)}\n` +
