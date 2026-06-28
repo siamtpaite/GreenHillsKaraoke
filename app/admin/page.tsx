@@ -159,6 +159,11 @@ export default function AdminDashboard() {
   const [formLoading, setFormLoading] = useState(false);
   const [formBookings, setFormBookings] = useState<Booking[]>([]);
 
+  const [otp, setOtp] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpError, setOtpError] = useState('');
+
   const [activeTab, setActiveTab] = useState<AdminTab>('bookings');
   const [analyticsPeriod, setAnalyticsPeriod] = useState<AnalyticsPeriod>('week');
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
@@ -378,7 +383,10 @@ export default function AdminDashboard() {
     setFormError(''); setShowModal(true);
   };
 
-  const closeModal = () => { setShowModal(false); setEditingBooking(null); setFormBookings([]); };
+  const closeModal = () => {
+    setShowModal(false); setEditingBooking(null); setFormBookings([]);
+    setOtp(''); setOtpSent(false); setOtpSending(false); setOtpError('');
+  };
 
   const handleSubmit = async () => {
     if (conflict) { setFormError(conflict); return; }
@@ -388,6 +396,8 @@ export default function AdminDashboard() {
     if (!editingBooking && Number(form.amountPaid) < DEPOSIT_AMOUNT) {
       if (!form.paymentNote.trim()) { setFormError('Payment arrangement note is required when no advance is collected'); return; }
       if (!/^\d{10}$/.test(form.overridePhone.replace(/[^\d]/g, ''))) { setFormError('Enter your 10-digit admin WhatsApp number to authorize this slot lock'); return; }
+      if (!otpSent) { setFormError('Please send and enter the OTP sent to your WhatsApp'); return; }
+      if (!/^\d{6}$/.test(otp)) { setFormError('Enter the 6-digit OTP sent to your WhatsApp'); return; }
     }
     setFormLoading(true); setFormError('');
     try {
@@ -397,6 +407,7 @@ export default function AdminDashboard() {
         duration: Number(form.duration),
         amountPaid: Number(form.amountPaid),
         ...(editingBooking ? { bookingId: editingBooking.id } : {}),
+        ...(!editingBooking && Number(form.amountPaid) < DEPOSIT_AMOUNT ? { otp } : {}),
       };
       const res = await fetch('/api/admin/bookings/manual', {
         method: editingBooking ? 'PUT' : 'POST',
@@ -425,6 +436,21 @@ export default function AdminDashboard() {
       else setError(data.error || 'Failed to resend WA');
     } catch { setError('Error resending WA'); }
     finally { setWaResendingId(null); }
+  };
+
+  const handleSendOtp = async () => {
+    setOtpSending(true); setOtpError(''); setOtpSent(false); setOtp('');
+    try {
+      const res = await fetch('/api/admin/otp/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-admin-password': adminToken },
+        body: JSON.stringify({ phone: form.overridePhone }),
+      });
+      const data = await res.json();
+      if (data.success) { setOtpSent(true); }
+      else { setOtpError(data.error || 'Failed to send OTP'); }
+    } catch { setOtpError('Network error. Please try again.'); }
+    finally { setOtpSending(false); }
   };
 
   const handleCheckIn = async (bookingId: string) => {
@@ -970,7 +996,8 @@ export default function AdminDashboard() {
 
               {!editingBooking && Number(form.amountPaid) < DEPOSIT_AMOUNT && (
                 <div className="p-4 bg-orange-500/10 border border-orange-400/40 rounded-lg space-y-3">
-                  <p className="text-orange-300 text-xs font-bold">⚠️ No advance payment — Admin override required to lock this slot</p>
+                  <p className="text-orange-300 text-xs font-bold">⚠️ No advance payment — Admin override + OTP required to lock this slot</p>
+
                   <div>
                     <label className={LABEL_CLS}>Payment Arrangement Note *</label>
                     <textarea
@@ -981,18 +1008,47 @@ export default function AdminDashboard() {
                       className={INPUT_CLS + ' resize-none'}
                     />
                   </div>
+
                   <div>
                     <label className={LABEL_CLS}>Your Admin WhatsApp Number (10 digits) *</label>
-                    <input
-                      type="tel"
-                      maxLength={10}
-                      placeholder="e.g. 8787633291"
-                      value={form.overridePhone}
-                      onChange={e => setField('overridePhone', e.target.value.replace(/[^\d]/g, '').slice(0, 10))}
-                      className={INPUT_CLS}
-                    />
-                    <p className="text-orange-300/50 text-xs mt-1">Must match a registered admin number — included in the WA alert sent to all admins</p>
+                    <div className="flex gap-2">
+                      <input
+                        type="tel"
+                        maxLength={10}
+                        placeholder="e.g. 8787633291"
+                        value={form.overridePhone}
+                        onChange={e => {
+                          setField('overridePhone', e.target.value.replace(/[^\d]/g, '').slice(0, 10));
+                          setOtpSent(false); setOtp(''); setOtpError('');
+                        }}
+                        className={INPUT_CLS}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleSendOtp}
+                        disabled={otpSending || form.overridePhone.length !== 10}
+                        className="shrink-0 bg-orange-500/80 hover:bg-orange-500 disabled:opacity-40 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition-all whitespace-nowrap"
+                      >
+                        {otpSending ? '⏳ Sending…' : otpSent ? '✅ Resend' : '📲 Send OTP'}
+                      </button>
+                    </div>
+                    {otpError && <p className="text-red-400 text-xs mt-1">{otpError}</p>}
                   </div>
+
+                  {otpSent && (
+                    <div>
+                      <label className={LABEL_CLS}>Enter OTP sent to your WhatsApp *</label>
+                      <input
+                        type="tel"
+                        maxLength={6}
+                        placeholder="6-digit code"
+                        value={otp}
+                        onChange={e => setOtp(e.target.value.replace(/[^\d]/g, '').slice(0, 6))}
+                        className={INPUT_CLS + ' tracking-widest text-center text-lg font-bold'}
+                      />
+                      <p className="text-orange-300/50 text-xs mt-1">Code expires in 5 minutes · Your number will appear in the admin WA alert</p>
+                    </div>
+                  )}
                 </div>
               )}
 

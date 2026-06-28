@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
   }
   try {
     const body = await req.json();
-    const { date, startTime: rawStartTime, duration: rawDuration, customerName, customerPhone, customerEmail, amountPaid, paymentType, notes, specialRequests, overridePhone, paymentNote } = body;
+    const { date, startTime: rawStartTime, duration: rawDuration, customerName, customerPhone, customerEmail, amountPaid, paymentType, notes, specialRequests, overridePhone, paymentNote, otp } = body;
 
     const startTime = rawStartTime !== undefined ? Number(rawStartTime) : undefined;
     const duration = rawDuration !== undefined ? Number(rawDuration) : undefined;
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
     const totalAmount = Math.ceil(duration / 60) * HOURLY_RATE;
     const paidAmount = amountPaid !== undefined ? Number(amountPaid) : totalAmount;
 
-    // If no advance payment, require a registered admin phone for accountability
+    // If no advance payment, require a registered admin phone + OTP verification
     if (paidAmount < DEPOSIT_AMOUNT) {
       const phone10 = (overridePhone ?? '').replace(/\D/g, '').slice(-10);
       if (!ADMIN_PHONES.includes(phone10)) {
@@ -70,6 +70,34 @@ export async function POST(req: NextRequest) {
           { status: 403 }
         );
       }
+      const otpRef = adminDb.doc(`otpVerifications/${phone10}`);
+      const otpSnap = await otpRef.get();
+      if (!otpSnap.exists) {
+        return NextResponse.json(
+          { success: false, error: 'No OTP found. Please request a new code.' } as ApiResponse<null>,
+          { status: 403 }
+        );
+      }
+      const otpData = otpSnap.data()!;
+      if (otpData.used) {
+        return NextResponse.json(
+          { success: false, error: 'OTP already used. Please request a new code.' } as ApiResponse<null>,
+          { status: 403 }
+        );
+      }
+      if (otpData.expiresAt.toMillis() < Date.now()) {
+        return NextResponse.json(
+          { success: false, error: 'OTP expired. Please request a new code.' } as ApiResponse<null>,
+          { status: 403 }
+        );
+      }
+      if (otpData.otp !== String(otp)) {
+        return NextResponse.json(
+          { success: false, error: 'Incorrect OTP. Please try again.' } as ApiResponse<null>,
+          { status: 403 }
+        );
+      }
+      await otpRef.update({ used: true });
     }
     const balanceDue = Math.max(0, totalAmount - paidAmount);
     const resolvedPaymentType: 'full' | 'deposit' =
