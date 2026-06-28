@@ -391,7 +391,7 @@ export default function AdminDashboard() {
   const handleSubmit = async () => {
     if (conflict) { setFormError(conflict); return; }
     if (!form.customerName.trim()) { setFormError('Guest name is required'); return; }
-    if (!/^\d{10}$/.test(form.customerPhone.replace(/[^\d]/g, ''))) { setFormError('Enter a valid 10-digit phone number'); return; }
+    if (!/^\d{10}$/.test(form.customerPhone.replace(/[^\d]/g, ''))) { setFormError("Enter a valid 10-digit phone number for the guest (Phone field)"); return; }
     if (!form.date) { setFormError('Date is required'); return; }
     if (!editingBooking && Number(form.amountPaid) < DEPOSIT_AMOUNT) {
       if (!form.paymentNote.trim()) { setFormError('Payment arrangement note is required when no advance is collected'); return; }
