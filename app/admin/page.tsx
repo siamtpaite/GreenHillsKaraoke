@@ -496,8 +496,8 @@ export default function AdminDashboard() {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center py-12 px-4 relative overflow-hidden">
         <div className="fixed inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-20 left-10 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl animate-pulse" />
-          <div className="absolute bottom-20 right-10 w-96 h-96 bg-pink-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
+          <div className="absolute top-20 left-10 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl" style={{ animation: 'floatA 20s ease-in-out infinite', willChange: 'transform' }} />
+          <div className="absolute bottom-20 right-10 w-96 h-96 bg-pink-500/10 rounded-full blur-3xl" style={{ animation: 'floatB 24s ease-in-out 1s infinite', willChange: 'transform' }} />
         </div>
         <div className="max-w-md w-full relative z-10">
           <div className="backdrop-blur-xl bg-slate-900/50 border border-cyan-400/30 rounded-2xl p-8 shadow-2xl shadow-cyan-400/20">
@@ -525,8 +525,8 @@ export default function AdminDashboard() {
   return (
     <div className="min-h-screen bg-slate-950 relative overflow-hidden py-12 px-4">
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-20 left-10 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl animate-pulse" />
-        <div className="absolute bottom-20 right-10 w-96 h-96 bg-pink-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
+        <div className="absolute top-20 left-10 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl" style={{ animation: 'floatA 20s ease-in-out infinite', willChange: 'transform' }} />
+        <div className="absolute bottom-20 right-10 w-96 h-96 bg-pink-500/10 rounded-full blur-3xl" style={{ animation: 'floatB 24s ease-in-out 1s infinite', willChange: 'transform' }} />
       </div>
 
       <div className="max-w-6xl mx-auto relative z-10">
