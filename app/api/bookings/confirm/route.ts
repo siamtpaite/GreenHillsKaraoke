@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { lockAndConfirmBooking, getBooking } from '@/lib/booking/service';
 import { adminDb } from '@/lib/firebase/admin';
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { verifyPaymentSignature, refundPayment, getPaymentDetails } from '@/lib/payment/razorpay';
 import { sendCustomerConfirmation, sendAdminBookingAlert } from '@/lib/whatsapp/baileys-send';
 import { ApiResponse } from '@/lib/types';
@@ -160,6 +160,45 @@ export async function POST(request: NextRequest) {
     }
 
     console.log(`[confirm] ✓ Booking ${bookingId} confirmed — ${date} ${duration}min for ${customerName}`);
+
+    // Ledger entry — keyed on razorpay_payment_id via create() so a duplicate confirm
+    // call for the same payment (lockAndConfirmBooking does not itself dedupe a second
+    // call for the same bookingId) can never produce a second ledger_entries row.
+    try {
+      await adminDb.collection('ledger_entries').doc(razorpay_payment_id).create({
+        date: Timestamp.fromMillis(paymentDetails.created_at * 1000),
+        amount: paymentDetails.amount / 100,
+        direction: 'IN',
+        mode: 'Razorpay-Gateway',
+        gl_category: 'KARAOKE INCOME',
+        revenue_category: 'Karaoke Booking',
+        customer_name: customerName,
+        customer_email: customerEmail || null,
+        phone: customerPhone,
+        booking_id: bookingId,
+        source: 'razorpay_webhook',
+        settlement_id: null,
+        // Razorpay's payment method/UPI reference aren't structured fields in this
+        // schema (remarks is the only free-text field) — capturing the VPA/UTR here
+        // means it isn't lost, useful when reconciling a UPI-paid booking against a
+        // bank statement later.
+        remarks: paymentDetails.method === 'upi' && paymentDetails.vpa
+          ? `UPI: ${paymentDetails.vpa}${paymentDetails.acquirer_data?.upi_transaction_id ? `, UTR: ${paymentDetails.acquirer_data.upi_transaction_id}` : ''}`
+          : null,
+        created_by: 'system',
+        created_at: FieldValue.serverTimestamp(),
+        edited_at: null,
+        edit_history: [],
+      });
+      console.log(`[confirm] Ledger entry created for payment ${razorpay_payment_id}`);
+    } catch (ledgerErr) {
+      const { code, message } = ledgerErr as { code?: number; message?: string };
+      if (code === 6 || /already exists/i.test(message ?? '')) {
+        console.log(`[confirm] Ledger entry already exists for payment ${razorpay_payment_id} — skipping (idempotent)`);
+      } else {
+        console.error(`[confirm] Failed to write ledger entry for payment ${razorpay_payment_id}:`, ledgerErr);
+      }
+    }
 
     const balanceDue = paymentType === 'full' ? 0 : totalAmount - DEPOSIT_AMOUNT;
 

@@ -20,7 +20,8 @@ const ADMIN_PHONES: string[] = (process.env.ADMIN_PHONES || '9089402122,84138539
 /**
  * POST /api/admin/bookings/manual
  * Create a confirmed booking without payment (walk-in / admin override).
- * Body: { date, startTime, duration, customerName, customerPhone, customerEmail?, amountPaid?, paymentType?, notes? }
+ * Body: { date, startTime, duration, customerName, customerPhone, customerEmail?, amountPaid?,
+ *   paymentMode? ("CASH" | "UPI-Direct", required if amountPaid > 0), paymentType?, notes? }
  * startTime: minutes from midnight. duration: minutes.
  */
 export async function POST(req: NextRequest) {
@@ -30,7 +31,7 @@ export async function POST(req: NextRequest) {
   }
   try {
     const body = await req.json();
-    const { date, startTime: rawStartTime, duration: rawDuration, customerName, customerPhone, customerEmail, amountPaid, paymentType, notes, specialRequests, overridePhone, paymentNote, otp } = body;
+    const { date, startTime: rawStartTime, duration: rawDuration, customerName, customerPhone, customerEmail, amountPaid, paymentType, paymentMode, notes, specialRequests, overridePhone, paymentNote, otp } = body;
 
     const startTime = rawStartTime !== undefined ? Number(rawStartTime) : undefined;
     const duration = rawDuration !== undefined ? Number(rawDuration) : undefined;
@@ -61,8 +62,16 @@ export async function POST(req: NextRequest) {
     const totalAmount = Math.ceil(duration / 60) * HOURLY_RATE;
     const paidAmount = amountPaid !== undefined ? Number(amountPaid) : totalAmount;
 
-    // If no advance payment, require a registered admin phone + OTP verification
+    // If no advance payment, require a registered admin phone + OTP verification, and a
+    // reason — checked server-side, not just in the admin UI, so this can't be skipped
+    // by calling the API directly. A silent override defeats the point of logging it.
     if (paidAmount < DEPOSIT_AMOUNT) {
+      if (!paymentNote || !String(paymentNote).trim()) {
+        return NextResponse.json(
+          { success: false, error: 'Payment arrangement note is required when no advance is collected' } as ApiResponse<null>,
+          { status: 400 }
+        );
+      }
       const phone10 = (overridePhone ?? '').replace(/\D/g, '').slice(-10);
       if (!ADMIN_PHONES.includes(phone10)) {
         return NextResponse.json(
@@ -99,12 +108,22 @@ export async function POST(req: NextRequest) {
       }
       await otpRef.update({ used: true });
     }
+    // Locked to the two methods an admin actually collects walk-in payment through —
+    // never free text, matches the ledger's own mode enum.
+    if (paidAmount > 0 && paymentMode !== 'CASH' && paymentMode !== 'UPI-Direct') {
+      return NextResponse.json(
+        { success: false, error: 'paymentMode must be CASH or UPI-Direct' } as ApiResponse<null>,
+        { status: 400 }
+      );
+    }
+
     const balanceDue = Math.max(0, totalAmount - paidAmount);
     const resolvedPaymentType: 'full' | 'deposit' =
       paymentType === 'full' || paymentType === 'deposit'
         ? paymentType
         : paidAmount >= totalAmount ? 'full' : 'deposit';
     const cancellationToken = crypto.randomBytes(6).toString('hex');
+    const isOverride = paidAmount < DEPOSIT_AMOUNT;
 
     await adminDb.runTransaction(async (tx) => {
       const existingSnap = await tx.get(
@@ -144,11 +163,38 @@ export async function POST(req: NextRequest) {
         cancellationToken,
         createdAt: FieldValue.serverTimestamp(),
         createdBy: 'admin',
-        ...(paidAmount < DEPOSIT_AMOUNT ? {
+        ...(isOverride ? {
           overrideBy: (overridePhone ?? '').replace(/\D/g, '').slice(-10),
           paymentNote: paymentNote ?? '',
         } : {}),
       });
+
+      // Ledger entry — same transaction as the booking so the two can never diverge
+      // (no world where the booking exists but the cash/UPI collected against it doesn't
+      // get logged, or vice versa). Skipped entirely for a full waiver: amount must be > 0
+      // in the ledger schema, and there's nothing to reconcile if no money changed hands.
+      if (paidAmount > 0) {
+        const ledgerRef = adminDb.collection('ledger_entries').doc(bookingId);
+        tx.create(ledgerRef, {
+          date: FieldValue.serverTimestamp(),
+          amount: paidAmount,
+          direction: 'IN',
+          mode: paymentMode,
+          gl_category: 'KARAOKE INCOME',
+          revenue_category: 'Karaoke Booking',
+          customer_name: customerName,
+          customer_email: customerEmail || null,
+          phone: customerPhone,
+          booking_id: bookingId,
+          source: 'admin_manual',
+          settlement_id: null,
+          remarks: isOverride ? paymentNote : null,
+          created_by: isOverride ? (overridePhone ?? '').replace(/\D/g, '').slice(-10) : 'admin',
+          created_at: FieldValue.serverTimestamp(),
+          edited_at: null,
+          edit_history: [],
+        });
+      }
     });
 
     const resolvedSpecialRequests = specialRequests ?? notes ?? '';

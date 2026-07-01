@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyWebhookSignature } from '@/lib/payment/razorpay';
 import { getBooking } from '@/lib/booking/service';
 import { sendCustomerConfirmation } from '@/lib/whatsapp/baileys-send';
+import { adminDb } from '@/lib/firebase/admin';
+import { FieldValue } from 'firebase-admin/firestore';
 
 /**
  * POST /api/webhooks/razorpay
@@ -24,6 +26,23 @@ export async function POST(request: NextRequest) {
     }
 
     const { event, payload } = JSON.parse(rawBody);
+
+    // Raw event safety net: /api/bookings/confirm is the authoritative path that verifies
+    // payment + writes the ledger IN-entry, but it depends on the customer's browser calling
+    // it after Razorpay's client-side success callback. If that never happens (closed tab,
+    // crash) Razorpay still captured the money — this preserves the verified raw event so a
+    // captured-but-never-confirmed payment can be found later (settlement reconciliation or
+    // manual review), instead of vanishing with no record anywhere.
+    try {
+      await adminDb.collection('webhook_events_raw').add({
+        source: 'razorpay',
+        event,
+        payload,
+        receivedAt: FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      console.error('[razorpay webhook] Failed to log raw event:', e);
+    }
 
     if (['payment.authorized', 'payment.captured'].includes(event)) {
       const paymentId = payload?.payment?.entity?.id;
