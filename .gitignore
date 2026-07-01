@@ -5,7 +5,7 @@ node_modules
 *.log
 .DS_Store
 whatsapp_sessions/
-greenhills-karaoke-firebase-adminsdk-fbsvc-6bfecb78be.json
+*firebase-adminsdk*.json
 .vercel
 twilio_2FA_recovery_code.txt
 .env*
