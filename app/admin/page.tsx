@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import Image from 'next/image';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import AdminManual from './AdminManual';
 
 const HOURLY_RATE = parseInt(process.env.NEXT_PUBLIC_HOURLY_RATE ?? '1180');
 const DEPOSIT_AMOUNT = parseInt(process.env.NEXT_PUBLIC_DEPOSIT_AMOUNT ?? '500');
@@ -52,6 +53,7 @@ interface OfflineForm {
   startTime: number;   // minutes from midnight
   duration: number;    // minutes
   amountPaid: number;
+  paymentMode: 'CASH' | 'UPI-Direct';
   specialRequests: string;
   overridePhone: string;
   paymentNote: string;
@@ -122,7 +124,7 @@ const DURATION_OPTS = [
 
 const EMPTY_FORM: OfflineForm = {
   customerName: '', customerPhone: '', customerEmail: '',
-  date: '', startTime: 14 * 60, duration: 120, amountPaid: 0, specialRequests: '', overridePhone: '', paymentNote: '',
+  date: '', startTime: 14 * 60, duration: 120, amountPaid: 0, paymentMode: 'CASH', specialRequests: '', overridePhone: '', paymentNote: '',
 };
 
 const INPUT_CLS = 'w-full px-3 py-2 bg-slate-800/60 border border-cyan-400/30 rounded-lg text-white placeholder-cyan-300/30 focus:outline-none focus:border-cyan-300 text-sm';
@@ -143,6 +145,7 @@ const pctW = (dur: number) => `${(dur / ADMIN_SPAN * 100).toFixed(3)}%`;
 
 export default function AdminDashboard() {
   const [authenticated, setAuthenticated] = useState(false);
+  const [showManual, setShowManual] = useState(false);
   const [password, setPassword] = useState('');
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -376,6 +379,7 @@ export default function AdminDashboard() {
   const openEdit = (b: Booking) => {
     setEditingBooking(b);
     setForm({
+      ...EMPTY_FORM,
       customerName: b.customerName, customerPhone: b.customerPhone, customerEmail: b.customerEmail ?? '',
       date: b.date, startTime: bookingStart(b), duration: bookingDuration(b),
       amountPaid: b.paidAmount ?? b.depositPaid, specialRequests: b.specialRequests ?? b.notes ?? '',
@@ -398,6 +402,9 @@ export default function AdminDashboard() {
       if (!/^\d{10}$/.test(form.overridePhone.replace(/[^\d]/g, ''))) { setFormError('Enter your 10-digit admin WhatsApp number to authorize this slot lock'); return; }
       if (!otpSent) { setFormError('Please send and enter the OTP sent to your WhatsApp'); return; }
       if (!/^\d{6}$/.test(otp)) { setFormError('Enter the 6-digit OTP sent to your WhatsApp'); return; }
+    }
+    if (!editingBooking && Number(form.amountPaid) > 0 && form.paymentMode !== 'CASH' && form.paymentMode !== 'UPI-Direct') {
+      setFormError('Select how the payment was collected (Cash or UPI-Direct)'); return;
     }
     setFormLoading(true); setFormError('');
     try {
@@ -537,6 +544,10 @@ export default function AdminDashboard() {
             <h1 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-pink-300">ADMIN CONTROL</h1>
             <p className="text-cyan-300/40 text-xs mt-0.5 uppercase tracking-widest">Green Hills Karaoke · Booking Dashboard</p>
           </div>
+          <button onClick={() => setShowManual(true)}
+            className="shrink-0 bg-slate-800/50 border border-slate-600 text-green-300/80 px-4 py-2 rounded-lg hover:border-green-500/50 hover:text-green-300 text-sm transition-all">
+            📖 Manual
+          </button>
           <button onClick={() => setAuthenticated(false)}
             className="shrink-0 bg-slate-800/50 border border-slate-600 text-cyan-300/80 px-4 py-2 rounded-lg hover:border-cyan-500/50 hover:text-cyan-300 text-sm transition-all">
             🚪 Logout
@@ -1001,6 +1012,18 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
+              {!editingBooking && Number(form.amountPaid) > 0 && (
+                <div>
+                  <label className={LABEL_CLS}>How Was Payment Collected? *</label>
+                  <select value={form.paymentMode}
+                    onChange={e => setField('paymentMode', e.target.value as OfflineForm['paymentMode'])}
+                    className={INPUT_CLS}>
+                    <option value="CASH">Cash</option>
+                    <option value="UPI-Direct">UPI (Direct — not through Razorpay)</option>
+                  </select>
+                </div>
+              )}
+
               {!editingBooking && Number(form.amountPaid) < DEPOSIT_AMOUNT && (
                 <div className="p-4 bg-orange-500/10 border border-orange-400/40 rounded-lg space-y-3">
                   <p className="text-orange-300 text-xs font-bold">⚠️ No advance payment — Admin override + OTP required to lock this slot</p>
@@ -1101,6 +1124,8 @@ export default function AdminDashboard() {
           </div>
         </div>
       )}
+
+      <AdminManual open={showManual} onClose={() => setShowManual(false)} />
     </div>
   );
 }
